@@ -1,0 +1,44 @@
+{
+  "id": "해와달",
+  "id_eng": "sun-and-moon",
+  "world": "옛날 옛적, 깊은 산골 마을",
+  "start_moment_id": "MOM_INTRO",
+  "moments": {
+    "MOM_INTRO": {
+      "description": "이야기의 시작. 엄마를 기다리다 신비로운 빛을 마주하는 장면을 묘사한다.",
+      "choices": [
+        { "action_type": "NEUTRAL", "next_moment_id": "MOM_TIGER_KNOCK" }
+      ]
+    },
+    "MOM_TIGER_KNOCK": {
+      "description": "엄마를 흉내 낸 호랑이가 문을 열어달라고 하는 긴장감 넘치는 상황을 묘사한다. 아이들이 위기감을 느끼게 만든다.",
+      "choices": [
+        { "action_type": "GOOD", "next_moment_id": "MOM_ESCAPE_TREE" },
+        { "action_type": "NEUTRAL", "next_moment_id": "MOM_ESCAPE_TREE" },
+        { "action_type": "BAD", "next_moment_id": "END_BAD_OPEN_DOOR" }
+      ]
+    },
+    "MOM_ESCAPE_TREE": {
+      "description": "아이들이 호랑이를 피해 뒷마당으로 도망쳐 큰 나무 위로 올라가는 장면을 묘사한다. 호랑이가 나무 아래에서 아이들을 올려다보게 만든다.",
+      "choices": [
+        { "action_type": "GOOD", "next_moment_id": "MOM_PRAY_ROPE" },
+        { "action_type": "BAD", "next_moment_id": "END_BAD_TELL_SECRET" }
+      ]
+    },
+    "MOM_PRAY_ROPE": {
+      "description": "호랑이가 나무를 거의 다 올라오자, 아이들이 하늘에 기도를 드리는 절박한 장면을 묘사한다. 하늘에서 동아줄이 내려오는 기적적인 상황을 연출한다.",
+      "choices": [
+        { "action_type": "NEUTRAL", "next_moment_id": "END_GOOD_SUN_MOON" }
+      ]
+    },
+    "END_GOOD_SUN_MOON": {
+      "description": "[굿 엔딩] 아이들은 하늘로 올라가 해와 달이 되고, 호랑이는 썩은 동아줄을 받아 떨어져 최후를 맞는 결말을 묘사하며 이야기를 마무리한다."
+    },
+    "END_BAD_OPEN_DOOR": {
+      "description": "[배드 엔딩] 아이들이 호랑이의 꼬임에 넘어가 문을 열어주고 마는 비극적인 결말을 묘사한다."
+    },
+    "END_BAD_TELL_SECRET": {
+      "description": "[배드 엔딩] 아이들이 나무 위에 올라가는 방법을 호랑이에게 알려주고 마는 비극적인 결말을 묘사한다."
+    }
+  }
+}

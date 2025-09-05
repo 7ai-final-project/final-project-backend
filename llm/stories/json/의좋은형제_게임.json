@@ -1,0 +1,62 @@
+{
+  "id": "의좋은형제_게임",
+  "id_eng": "the-good-brothers",
+  "world": "가난한 농촌에서 형제간의 깊은 의리를 보여주는 따뜻한 이야기",
+  "start_moment_id": "MOMENT_START",
+  "moments": {
+    "MOMENT_START": {
+      "description": "가을이 되어 벼가 익자 성칠이는 벼를 베어 논두렁에 널어 말린다. 성칠이는 식구가 많은 형님을 걱정하며 자신의 벼를 형님 논에 몰래 옮겨줄 계획을 세운다.",
+      "choices": [
+        {
+          "action_type": "DECIDE_HELP",
+          "next_moment_id": "MOMENT_FIRST_MOVE"
+        },
+        {
+          "action_type": "IGNORE",
+          "next_moment_id": "ENDING_A"
+        }
+      ]
+    },
+    "MOMENT_FIRST_MOVE": {
+      "description": "성칠이는 밤중에 남몰래 자신의 벼를 형님 논에 옮겨둔다. 하지만 다음 날 논을 확인하자 벼의 양이 줄지 않아 혼란스러워한다.",
+      "choices": [
+        {
+          "action_type": "TRY_AGAIN",
+          "next_moment_id": "MOMENT_SECOND_MOVE"
+        },
+        {
+          "action_type": "GIVE_UP",
+          "next_moment_id": "ENDING_A"
+        }
+      ]
+    },
+    "MOMENT_SECOND_MOVE": {
+      "description": "성칠이는 다시 한번 밤에 벼를 옮겨보지만, 여전히 벼의 양이 변하지 않는다. 이 현상이 귀신의 장난인지 의아해하며 또 한 번 시도하기로 결심한다.",
+      "choices": [
+        {
+          "action_type": "INVESTIGATE",
+          "next_moment_id": "MOMENT_REVEAL"
+        },
+        {
+          "action_type": "STOP",
+          "next_moment_id": "ENDING_A"
+        }
+      ]
+    },
+    "MOMENT_REVEAL": {
+      "description": "캄캄한 밤, 성칠이는 벼를 옮기다 형님과 마주친다. 서로의 선행을 알게 된 형제는 서로의 마음을 감사히 여기며 벼를 나누어 먹기로 한다.",
+      "choices": [
+        {
+          "action_type": "ACCEPT",
+          "next_moment_id": "ENDING_GOOD"
+        }
+      ]
+    },
+    "ENDING_A": {
+      "description": "[배드 엔딩] 성칠이는 벼를 옮기는 것을 포기하거나 형님을 돕지 않아, 각자 벼가 부족한 채로 힘든 겨울을 맞이한다."
+    },
+    "ENDING_GOOD": {
+      "description": "[해피 엔딩] 형제는 서로의 따뜻한 마음을 확인하고, 벼를 나누어 먹으며 의좋은 형제의 정을 나눈다."
+    }
+  }
+}

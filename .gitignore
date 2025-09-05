@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Python Environments
+.env
+.venv
+
+# Model
+*.pkl
+
+# Django
+db.sqlite3
