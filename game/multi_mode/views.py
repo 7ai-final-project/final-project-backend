@@ -1,5 +1,6 @@
 # backend/game/multi_mode/views.py
-
+import datetime
+from django.utils import timezone
 from rest_framework import generics, permissions, status, viewsets 
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -9,8 +10,14 @@ from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from django.contrib.auth.hashers import check_password
 
-from game.models import GameRoom, GameJoin
-from game.serializers import GameRoomSerializer
+from game.models import (
+    GameRoom, GameJoin, Scenario, Genre,
+    Difficulty, Mode, GameRoomSelectScenario
+)
+from game.serializers import (
+    GameRoomSerializer, ScenarioSerializer, GenreSerializer,
+    DifficultySerializer, ModeSerializer, GameRoomSelectScenarioSerializer
+)
 
 # Channels 브로드캐스트
 from asgiref.sync import async_to_sync
@@ -43,11 +50,11 @@ def broadcast_room(room_id, payload):
     )
 
 class RoomListCreateView(generics.ListCreateAPIView):
-    queryset = GameRoom.objects.all().order_by("-created_at")
+    queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at") # 삭제되지 않은 방만 조회하도록 변경
     serializer_class = GameRoomSerializer
 
     def get_queryset(self):
-        queryset = GameRoom.objects.all().order_by("-created_at")
+        queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at")
         
         # 이름으로 검색 (search 쿼리 파라미터)
         search_query = self.request.query_params.get('search', None)
@@ -94,7 +101,14 @@ class RoomDetailView(generics.RetrieveDestroyAPIView):
             raise PermissionDenied("방장은 본인 방만 삭제할 수 있습니다.")
         try:
             room_id = instance.id
-            instance.delete()
+            instance.deleted_at = timezone.now()
+            instance.status = "finish"
+            instance.is_deleted = True 
+            
+            instance.save(update_fields=["deleted_at", "status", "is_deleted"])
+            
+            instance.selected_by_room.update(is_ready=False)
+
             broadcast_room(room_id, {"type": "room_deleted", "room_id": room_id})
         except Exception as e:
             raise ValidationError({"detail": f"방 삭제 실패: {str(e)}"})
@@ -138,21 +152,20 @@ class LeaveRoomView(APIView):
 
     def post(self, request, pk):
         room = get_object_or_404(GameRoom, pk=pk)
-        print("👀 leave view user:", request.user)
-        print("👀 room owner:", room.owner)
-        print("👀 participants:", list(room.selected_by_room.all()))
-
+        
         try:
-            # 👇 [수정] 'room=room'을 'gameroom=room'으로 수정
             participant = GameJoin.objects.get(gameroom=room, user=request.user)
         except GameJoin.DoesNotExist:
             raise NotFound("이 방의 참가자가 아닙니다.")
 
         participant.delete()
         broadcast_room(room.id, {"type": "leave", "user": request.user.email})
-        print(f"✅ {request.user} leave 성공 (owner={room.owner})")
-        print("👀 leave view user:", request.user.email)
 
+        remaining_selected_by_room = room.selected_by_room.count()
+        if remaining_selected_by_room == 0:
+            room.status = "finish"
+            room.save(update_fields=["status"])
+        
         return Response(GameRoomSerializer(room).data, status=status.HTTP_200_OK)
 
 class ToggleReadyView(APIView):
@@ -169,8 +182,8 @@ class ToggleReadyView(APIView):
         participant.save()
 
         # 모두 준비됐는지 체크(방장 포함)
-        participants = room.selected_by_room.all()
-        all_ready = participants.exists() and all(p.is_ready for p in participants)
+        selected_by_room = room.selected_by_room.all()
+        all_ready = selected_by_room.exists() and all(p.is_ready for p in selected_by_room)
 
         payload = {
             "type": "ready_update",
@@ -189,11 +202,11 @@ class StartMultiGameView(APIView):
         if room.owner != request.user:
             raise PermissionDenied("방장만 시작할 수 있습니다.")
 
-        participants = room.selected_by_room.all()
-        if not (participants.exists() and all(p.is_ready for p in participants)):
+        selected_by_room = room.selected_by_room.all()
+        if not (selected_by_room.exists() and all(p.is_ready for p in selected_by_room)):
             raise PermissionDenied("모든 참가자가 준비해야 합니다.")
 
-        room.status = "in_game"
+        room.status = "play"
         room.save()
 
         # 'leave'가 아니라 'start' 이벤트를 보내는 것이 더 명확할 수 있습니다.
@@ -209,7 +222,7 @@ class RoomViewSet(viewsets.ModelViewSet):
         room = self.get_object()
         if room.owner != request.user:
             return Response({"error": "방장만 게임을 시작할 수 있습니다."}, status=403)
-        room.status = "in_game"
+        room.status = "play"
         room.save()
         return Response({"status": "게임 시작"}, status=200)
 
@@ -235,3 +248,53 @@ class EndMultiGameView(APIView):
         room.status = "waiting"
         room.save()
         return Response({"status": "게임 종료"}, status=status.HTTP_200_OK)
+    
+class ScenarioListView(generics.ListAPIView):
+    """모든 시나리오 목록을 반환하는 API"""
+    queryset = Scenario.objects.filter(is_display=True)
+    serializer_class = ScenarioSerializer
+    permission_classes = [permissions.AllowAny]
+
+class GenreListView(generics.ListAPIView):
+    """모든 장르 목록을 반환하는 API"""
+    queryset = Genre.objects.filter(is_display=True)
+    serializer_class = GenreSerializer
+    permission_classes = [permissions.AllowAny]
+
+class DifficultyListView(generics.ListAPIView):
+    """모든 난이도 목록을 반환하는 API"""
+    queryset = Difficulty.objects.filter(is_display=True)
+    serializer_class = DifficultySerializer
+    permission_classes = [permissions.AllowAny]
+
+class ModeListView(generics.ListAPIView):
+    """모든 게임 모드 목록을 반환하는 API"""
+    queryset = Mode.objects.filter(is_display=True)
+    serializer_class = ModeSerializer
+    permission_classes = [permissions.AllowAny]
+
+# --- 게임방 옵션 선택/저장 API View ---
+
+class GameRoomSelectScenarioView(APIView):
+    """게임방의 시나리오/옵션을 설정하는 API"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        room = get_object_or_404(GameRoom, pk=pk)
+
+        if room.owner != request.user:
+            raise PermissionDenied("방장만 게임 옵션을 변경할 수 있습니다.")
+
+        # 1. Serializer를 통해 프론트에서 온 데이터가 유효한지 먼저 검사합니다.
+        serializer = GameRoomSelectScenarioSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True) # 유효하지 않으면 400 에러를 자동으로 발생시킴
+
+        # 2. 유효성이 검증된 데이터(validated_data)를 사용하여 저장합니다.
+        selection, created = GameRoomSelectScenario.objects.update_or_create(
+            gameroom=room,
+            defaults=serializer.validated_data
+        )
+
+        # 3. 최종적으로 저장된 객체를 다시 시리얼라이즈하여 응답합니다.
+        response_serializer = GameRoomSelectScenarioSerializer(instance=selection)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
