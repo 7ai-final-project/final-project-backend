@@ -120,14 +120,14 @@ class JoinRoomView(APIView):
         room = get_object_or_404(GameRoom, pk=pk)
         user = request.user
 
-        # 이미 참가 중인지 확인
-        if room.selected_by_room.filter(user=user).exists():
+        # 이미 참가 중인지 확인 (left_at이 null인 경우만)
+        if room.selected_by_room.filter(user=user, left_at__isnull=True).exists():
             # 이미 참가 중이면 그냥 성공 처리
             data = GameRoomSerializer(room).data
             return Response(data, status=status.HTTP_200_OK)
         
-        # 방이 꽉 찼는지 확인
-        if room.selected_by_room.count() >= room.max_players:
+        # 방이 꽉 찼는지 확인 (left_at이 null인 경우만)
+        if room.selected_by_room.filter(left_at__isnull=True).count() >= room.max_players:
             raise ValidationError("방이 가득 찼습니다.")
         
         # 비밀방인 경우, 비밀번호 확인
@@ -152,21 +152,39 @@ class LeaveRoomView(APIView):
 
     def post(self, request, pk):
         room = get_object_or_404(GameRoom, pk=pk)
+        user = request.user
         
         try:
-            participant = GameJoin.objects.get(gameroom=room, user=request.user)
+            participant = GameJoin.objects.get(gameroom=room, user=user, left_at__isnull=True)
         except GameJoin.DoesNotExist:
             raise NotFound("이 방의 참가자가 아닙니다.")
 
-        participant.delete()
-        broadcast_room(room.id, {"type": "leave", "user": request.user.email})
-
-        remaining_selected_by_room = room.selected_by_room.count()
-        if remaining_selected_by_room == 0:
-            room.status = "finish"
-            room.save(update_fields=["status"])
+        # 먼저, 나가는 유저의 상태를 업데이트합니다.
+        participant.is_ready = False
+        participant.left_at = timezone.now()
+        participant.save(update_fields=['is_ready', 'left_at'])
         
-        return Response(GameRoomSerializer(room).data, status=status.HTTP_200_OK)
+        # 유저가 나간 후, 방에 남은 활성 참가자 수를 확인합니다.
+        remaining_count = room.selected_by_room.filter(left_at__isnull=True).count()
+        
+        if remaining_count == 0:
+            # 남은 인원이 0명이면 방을 삭제(소프트 삭제) 처리합니다.
+            room.deleted_at = timezone.now()
+            room.status = "finish"
+            room.is_deleted = True
+            room.save(update_fields=["deleted_at", "status", "is_deleted"])
+            
+            # 모든 클라이언트에게 방이 삭제되었음을 알립니다.
+            broadcast_room(room.id, {"type": "room_deleted", "room_id": room.id})
+            
+            # 방이 삭제되었으므로 별도 콘텐츠 없이 성공 응답을 보냅니다.
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        
+        else:
+            # 아직 방에 다른 유저가 남아있으면, 퇴장 사실만 알립니다.
+            broadcast_room(room.id, {"type": "leave", "user": user.email})
+            return Response(GameRoomSerializer(room).data, status=status.HTTP_200_OK)
+
 
 class ToggleReadyView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -182,7 +200,7 @@ class ToggleReadyView(APIView):
         participant.save()
 
         # 모두 준비됐는지 체크(방장 포함)
-        selected_by_room = room.selected_by_room.all()
+        selected_by_room = room.selected_by_room.filter(left_at__isnull=True)
         all_ready = selected_by_room.exists() and all(p.is_ready for p in selected_by_room)
 
         payload = {
@@ -202,7 +220,7 @@ class StartMultiGameView(APIView):
         if room.owner != request.user:
             raise PermissionDenied("방장만 시작할 수 있습니다.")
 
-        selected_by_room = room.selected_by_room.all()
+        selected_by_room = room.selected_by_room.filter(left_at__isnull=True)
         if not (selected_by_room.exists() and all(p.is_ready for p in selected_by_room)):
             raise PermissionDenied("모든 참가자가 준비해야 합니다.")
 

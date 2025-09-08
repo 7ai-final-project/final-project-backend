@@ -31,7 +31,8 @@ class GameJoinSerializer(serializers.ModelSerializer):
 
 class GameRoomSerializer(serializers.ModelSerializer):
     owner = serializers.CharField(source='owner.name', read_only=True)
-    selected_by_room = GameJoinSerializer(many=True, read_only=True)
+    selected_by_room = serializers.SerializerMethodField()
+    current_players = serializers.SerializerMethodField()
 
     class Meta:
         model = GameRoom
@@ -41,6 +42,7 @@ class GameRoomSerializer(serializers.ModelSerializer):
             "description",
             "owner",
             "max_players",
+            "current_players",
             "status",
             "selected_by_room",
             "created_at",
@@ -56,9 +58,15 @@ class GameRoomSerializer(serializers.ModelSerializer):
     def get_owner(self, obj):
         # username 대신 email 사용 (필요하다면 name 같은 다른 필드도 가능)
         return obj.owner.email if obj.owner else None
+    
+    def get_selected_by_room(self, obj):
+        """현재 방에 있는 참가자(나가지 않은 사람) 목록만 반환합니다."""
+        participants = obj.selected_by_room.filter(left_at__isnull=True)
+        serializer = GameJoinSerializer(participants, many=True)
+        return serializer.data
 
     def get_current_players(self, obj):
-        return obj.selected_by_room.count()
+        return obj.selected_by_room.filter(left_at__isnull=True).count()
     
     def create(self, validated_data):
         password = validated_data.pop('password', None)

@@ -40,7 +40,7 @@ def _toggle_ready(room_id, user):
 @database_sync_to_async
 def _serialize_selected_by_room(room_id):
     qs = (
-        GameJoin.objects.filter(gameroom_id=room_id)
+        GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True)
         .select_related("user")
         .order_by("joined_at", "id")
     )
