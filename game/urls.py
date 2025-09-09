@@ -8,7 +8,12 @@ from game.story_mode.views import (
     MakeChoiceView, 
     StoryListView,
 )
-from game.multi_mode.views import RoomListCreateView, RoomDetailView, JoinRoomView, LeaveRoomView, ToggleReadyView, StartMultiGameView, EndMultiGameView,get_scene_templates
+from game.multi_mode.views import (
+    RoomListCreateView, RoomDetailView, JoinRoomView, LeaveRoomView, 
+    ToggleReadyView, StartMultiGameView, EndMultiGameView, get_scene_templates,
+    ScenarioListView, GenreListView, DifficultyListView, ModeListView,
+    GameRoomSelectScenarioView, CharacterListView
+)
 
 urlpatterns = [
     # --- 스토리 모드 URL ---
@@ -25,4 +30,14 @@ urlpatterns = [
     path("<uuid:pk>/start/", StartMultiGameView.as_view(), name="room-start"),
     path("<uuid:pk>/end/", EndMultiGameView.as_view(), name="room-end"),
     path("api/scenes/", get_scene_templates, name="multi_api_scenes"),
+
+    path("options/scenarios/", ScenarioListView.as_view(), name="scenario-list"),
+    path("options/genres/", GenreListView.as_view(), name="genre-list"),
+    path("options/difficulties/", DifficultyListView.as_view(), name="difficulty-list"),
+    path("options/modes/", ModeListView.as_view(), name="mode-list"),
+    path("characters/", CharacterListView.as_view(), name="character-list"),
+    
+    # --- 게임방 옵션 선택/저장 URL ---
+    path("<uuid:pk>/options/", GameRoomSelectScenarioView.as_view(), name="room-select-scenario"),
+
 ]

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from game.models import (
     StorymodeMoment, StorymodeChoice, Story, GameRoom, GameJoin,
-    Scenario, Genre, Difficulty, Mode, GameRoomSelectScenario
+    Scenario, Genre, Difficulty, Mode, GameRoomSelectScenario,Character
 )
 from django.contrib.auth.hashers import make_password
 
@@ -31,7 +31,9 @@ class GameJoinSerializer(serializers.ModelSerializer):
 
 class GameRoomSerializer(serializers.ModelSerializer):
     owner = serializers.CharField(source='owner.name', read_only=True)
+    # [수정 👇] SerializerMethodField를 사용하여 현재 참가자만 필터링합니다.
     selected_by_room = serializers.SerializerMethodField()
+    # [추가 👇] 현재 인원 수를 정확하게 계산하는 필드를 추가합니다.
     current_players = serializers.SerializerMethodField()
 
     class Meta:
@@ -46,7 +48,7 @@ class GameRoomSerializer(serializers.ModelSerializer):
             "status",
             "selected_by_room",
             "created_at",
-            #'deleted_at',
+            # 'deleted_at',
             "room_type",
             "password",
             "is_deleted",
@@ -106,3 +108,34 @@ class GameRoomSelectScenarioSerializer(serializers.ModelSerializer):
         model = GameRoomSelectScenario
         # gameroom은 URL에서 받아오므로 필드에서 제외합니다.
         fields = ['scenario', 'genre', 'difficulty', 'mode']
+
+class CharacterSerializer(serializers.ModelSerializer):
+    """
+    DB의 Character 모델에서 ability 필드를 분해하여
+    stats와 skills를 별도의 필드로 가공합니다.
+    """
+    image = serializers.CharField(source='image_path', read_only=True)
+    
+    # [추가] 'stats'와 'skills'를 ability 필드에서 추출하기 위한 설정
+    stats = serializers.SerializerMethodField()
+    skills = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Character
+        # [수정] 프론트엔드에 최종적으로 보낼 필드 목록을 정의합니다.
+        # DB 필드명인 'ability'는 포함하지 않습니다.
+        fields = ['id', 'name', 'description', 'image', 'stats', 'skills', 'items']
+
+    def get_stats(self, obj):
+        """
+        Character 인스턴스(obj)의 ability 필드에서 'stats' 딕셔너리를 추출합니다.
+        .get()을 사용하여 'stats' 키가 없는 경우에도 에러 없이 빈 딕셔너리({})를 반환합니다.
+        """
+        return obj.ability.get('stats', {})
+
+    def get_skills(self, obj):
+        """
+        Character 인스턴스(obj)의 ability 필드에서 'skills' 리스트를 추출합니다.
+        .get()을 사용하여 'skills' 키가 없는 경우에도 에러 없이 빈 리스트([])를 반환합니다.
+        """
+        return obj.ability.get('skills', [])

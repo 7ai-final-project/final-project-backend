@@ -12,11 +12,11 @@ from django.contrib.auth.hashers import check_password
 
 from game.models import (
     GameRoom, GameJoin, Scenario, Genre,
-    Difficulty, Mode, GameRoomSelectScenario
+    Difficulty, Mode, GameRoomSelectScenario, Character
 )
 from game.serializers import (
     GameRoomSerializer, ScenarioSerializer, GenreSerializer,
-    DifficultySerializer, ModeSerializer, GameRoomSelectScenarioSerializer
+    DifficultySerializer, ModeSerializer, GameRoomSelectScenarioSerializer, CharacterSerializer
 )
 
 # Channels 브로드캐스트
@@ -228,11 +228,31 @@ class StartMultiGameView(APIView):
         if not (selected_by_room.exists() and all(p.is_ready for p in selected_by_room)):
             raise PermissionDenied("모든 참가자가 준비해야 합니다.")
 
+        try:
+            room_options = GameRoomSelectScenario.objects.get(gameroom=room)
+        except GameRoomSelectScenario.DoesNotExist:
+            raise NotFound("게임 옵션이 설정되지 않았습니다.")
+
+        # 🟢 WebSocket 페이로드에 게임 옵션 데이터를 포함시킵니다.
+        #    참고: Serializer를 사용하여 객체를 JSON으로 변환합니다.
+        payload = {
+            "type": "room_broadcast",
+            "message": {
+                "event": "game_start",
+                "topic": room_options.scenario.title, # 시나리오 제목
+                "difficulty": room_options.difficulty.name, # 난이도 이름
+                "mode": room_options.mode.name, # 모드 이름
+                "genre": room_options.genre.name, # 장르 이름
+            }
+        }
+
         room.status = "play"
         room.save()
 
-        # 'leave'가 아니라 'start' 이벤트를 보내는 것이 더 명확할 수 있습니다.
-        broadcast_room(room.id, {"type": "game_started", "user": request.user.email})
+        # 🟢 수정된 페이로드를 브로드캐스트합니다.
+        broadcast_room(room.id, payload)
+        
+        # API 응답
         return Response(GameRoomSerializer(room).data, status=status.HTTP_200_OK)
     
 class RoomViewSet(viewsets.ModelViewSet):
@@ -320,3 +340,16 @@ class GameRoomSelectScenarioView(APIView):
         # 3. 최종적으로 저장된 객체를 다시 시리얼라이즈하여 응답합니다.
         response_serializer = GameRoomSelectScenarioSerializer(instance=selection)
         return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+class CharacterListView(generics.ListAPIView):
+    """
+    쿼리 파라미터 'topic'으로 전달된 시나리오(Scenario)에 해당하는
+    캐릭터 목록을 반환하는 API 뷰입니다.
+    """
+    serializer_class = CharacterSerializer # 수정된 Serializer를 그대로 사용
+
+    def get_queryset(self):
+        topic_name = self.request.query_params.get('topic', None)
+        if topic_name:
+            return Character.objects.filter(scenario__title=topic_name)
+        return Character.objects.none()

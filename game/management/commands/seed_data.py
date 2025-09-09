@@ -7,19 +7,19 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write(self.style.SUCCESS('초기 데이터 생성을 시작합니다...'))
 
-        # get_or_create를 사용하여 중복 생성을 방지합니다.
-        Scenario.objects.get_or_create(
-            title="해와달",
-            defaults={'description': '호랑이에게서 살아남아 하늘의 해와 달이 된 남매 이야기'}
-        )
-        Scenario.objects.get_or_create(
-            title="구운몽",
-            defaults={'description': '성진의 꿈을 통해 인생무상을 깨닫는 이야기'}
-        )
-        Scenario.objects.get_or_create(
-            title="날개",
-            defaults={'description': '박제가 되어버린 천재를 아시오?'}
-        )
+        # # get_or_create를 사용하여 중복 생성을 방지합니다.
+        # Scenario.objects.get_or_create(
+        #     title="해와달",
+        #     defaults={'description': '호랑이에게서 살아남아 하늘의 해와 달이 된 남매 이야기'}
+        # )
+        # Scenario.objects.get_or_create(
+        #     title="구운몽",
+        #     defaults={'description': '성진의 꿈을 통해 인생무상을 깨닫는 이야기'}
+        # )
+        # Scenario.objects.get_or_create(
+        #     title="날개",
+        #     defaults={'description': '박제가 되어버린 천재를 아시오?'}
+        # )
 
         Genre.objects.get_or_create(name="전래동화")
         Genre.objects.get_or_create(name="고전소설")
