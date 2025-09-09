@@ -50,11 +50,13 @@ def broadcast_room(room_id, payload):
     )
 
 class RoomListCreateView(generics.ListCreateAPIView):
-    queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at") # 삭제되지 않은 방만 조회하도록 변경
+    queryset = GameRoom.objects.all().order_by("-created_at")
+    #queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at") # 삭제되지 않은 방만 조회하도록 변경
     serializer_class = GameRoomSerializer
 
     def get_queryset(self):
-        queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at")
+        queryset = GameRoom.objects.all().order_by("-created_at")
+        #queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at")
         
         # 이름으로 검색 (search 쿼리 파라미터)
         search_query = self.request.query_params.get('search', None)
@@ -101,11 +103,12 @@ class RoomDetailView(generics.RetrieveDestroyAPIView):
             raise PermissionDenied("방장은 본인 방만 삭제할 수 있습니다.")
         try:
             room_id = instance.id
-            instance.deleted_at = timezone.now()
+            #instance.deleted_at = timezone.now()
             instance.status = "finish"
             instance.is_deleted = True 
             
-            instance.save(update_fields=["deleted_at", "status", "is_deleted"])
+            instance.save(update_fields=["status", "is_deleted"])
+            #instance.save(update_fields=["deleted_at", "status", "is_deleted"])
             
             instance.selected_by_room.update(is_ready=False)
 
@@ -169,10 +172,11 @@ class LeaveRoomView(APIView):
         
         if remaining_count == 0:
             # 남은 인원이 0명이면 방을 삭제(소프트 삭제) 처리합니다.
-            room.deleted_at = timezone.now()
+            #room.deleted_at = timezone.now()
             room.status = "finish"
             room.is_deleted = True
-            room.save(update_fields=["deleted_at", "status", "is_deleted"])
+            room.save(update_fields=["status", "is_deleted"])
+            #room.save(update_fields=["deleted_at", "status", "is_deleted"])
             
             # 모든 클라이언트에게 방이 삭제되었음을 알립니다.
             broadcast_room(room.id, {"type": "room_deleted", "room_id": room.id})

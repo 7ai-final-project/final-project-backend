@@ -1,4 +1,28 @@
 import os
+import sys
+ 
+# 현재 스크립트 파일의 경로를 가져옵니다.
+# C:\Users\USER\Desktop\git\final-project\backend\llm\multi_mode
+current_dir = os.path.dirname(os.path.abspath(__file__))
+ 
+# 'backend' 디렉토리의 경로를 계산합니다.
+# 경로를 두 단계 위로 이동하면 'backend' 폴더에 도착합니다.
+# 'multi_mode' -> 'llm' -> 'backend'
+backend_dir = os.path.dirname(os.path.dirname(current_dir))
+ 
+# 'backend' 디렉토리를 파이썬 모듈 검색 경로에 추가합니다.
+# 이로써 파이썬이 'config'와 'game' 모듈을 찾을 수 있게 됩니다.
+sys.path.insert(0, backend_dir)
+ 
+# DJANGO_SETTINGS_MODULE 환경 변수를 설정합니다.
+# 'backend'가 검색 경로에 있으므로 'config' 폴더를 바로 찾을 수 있습니다.
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+ 
+# Django를 설정하여 모델을 로드합니다.
+import django
+django.setup()
+from game.models import Scenario, Character as DjangoCharacter
+
 import json
 import re
 import random
@@ -135,7 +159,8 @@ class TRPGGameMaster:
   "themes": ["주제1","주제2"],
   "tone": "전체 톤",
   "notable_characters": ["핵심 인물/집단 3~6개"],
-  "conflicts": ["갈등/과제 2~4개"]
+  "conflicts": ["갈등/과제 2~4개"],
+  "description": "한줄요약"
 }}
 스토리:
 {self.story_raw}"""
@@ -144,6 +169,18 @@ class TRPGGameMaster:
             text = self._ask_model([system, user], max_tokens=600, temperature=0.3)
             json_str = self._extract_json_block(text)
             data = json.loads(json_str)
+
+            # Scenario DB 저장
+            scenario_title = "해와달"
+            self.current_scenario_obj, created = Scenario.objects.get_or_create(
+                title=scenario_title,
+                defaults={'description': data.get('description','')}
+            )
+            if created:
+                print(f"시나리오 '{scenario_title}'가 새로 생성되었습니다.")
+            else:
+                print(f"시나리오 '{scenario_title}'가 이미 존재합니다.")
+
             lines = []
             lines.append(f"배경: {data.get('setting','')}")
             lines.append(f"주제: {', '.join(data.get('themes', []))}")
@@ -232,18 +269,37 @@ class TRPGGameMaster:
                         if stats[k] > 1:
                             stats[k] -= 1
                             ssum -= 1
-
-                characters.append(
-                    Character(
-                        id=str(ch.get("id", f"ch{i+1}")),
-                        name=ch.get("name", f"무명{i+1}"),
-                        role=ch.get("role", "탐험가"),
-                        stats=stats,
-                        skills=list(ch.get("skills", []))[:5],
-                        starting_items=list(ch.get("starting_items", []))[:5],
-                        playstyle=ch.get("playstyle", ""),
-                    )
+                
+                char_dataclass = Character(
+                    id=str(ch.get("id", f"ch{i+1}")),
+                    name=ch.get("name", f"무명{i+1}"),
+                    role=ch.get("role", "탐험가"),
+                    stats=stats,
+                    skills=list(ch.get("skills", []))[:5],
+                    starting_items=list(ch.get("starting_items", []))[:5],
+                    playstyle=ch.get("playstyle", ""),
                 )
+                characters.append(char_dataclass)
+
+                # Character DB 저장
+                django_char, created = DjangoCharacter.objects.get_or_create(
+                    scenario=self.current_scenario_obj,
+                    name=char_dataclass.name,
+                    defaults={
+                        'description' : f"역할: {char_dataclass.role}\n플레이 스타일: {char_dataclass.playstyle}",
+                        'items' : char_dataclass.starting_items,
+                        'ability' : {
+                            'stats': char_dataclass.stats,
+                            'skills': char_dataclass.skills,
+                        }
+                    }
+                )
+
+                if created:
+                    print(f"캐릭터 '{char_dataclass.name}'가 시나리오 '{self.current_scenario_obj.title}'에 새로 생성되었습니다.")
+                else:
+                    print(f"캐릭터 '{char_dataclass.name}'가 시나리오 '{self.current_scenario_obj.title}'에 이미 존재합니다.")
+
             except Exception:
                 continue
         self.characters = characters
