@@ -63,6 +63,7 @@ PROMPT_TEMPLATE = """
 [출력 JSON 형식]
 {{
   "id": "이야기의_한글_ID",
+  "id_eng": "이야기의_영어_ID",
   "world": "이야기의 전체적인 배경이나 주제 (한 문장으로 요약)",
   "start_moment_id": "MOMENT_START",
   "moments": {{
