@@ -1,0 +1,51 @@
+{
+  "id": "의좋은형제_브랜치게임",
+  "world": "가난한 농촌에서 형제간의 의와 배려가 기적을 만들어내는 이야기.",
+  "start_moment_id": "MOMENT_START",
+  "moments": {
+    "MOMENT_START": {
+      "description": "가을이 되어 벼가 익고, 성칠이는 벼를 베어 논두렁에 널어둔다. 하지만 올해 농사가 좋지 않아, 형님의 식구가 많다는 사실을 걱정한다.",
+      "choices": [
+        {
+          "action_type": "NEUTRAL",
+          "next_moment_id": "MOMENT_CONFLICT"
+        }
+      ]
+    },
+    "MOMENT_CONFLICT": {
+      "description": "성칠이는 형님을 돕기 위해 밤중에 자신의 벼를 몰래 형님 논에 옮긴다. 그러나 다음날 벼는 줄지 않고, 형님 논에도 늘지 않는다. 반복되는 이상한 일에 의문을 품는다.",
+      "choices": [
+        {
+          "action_type": "GOOD",
+          "next_moment_id": "MOMENT_CLIMAX"
+        },
+        {
+          "action_type": "BAD",
+          "next_moment_id": "ENDING_BAD_A"
+        }
+      ]
+    },
+    "MOMENT_CLIMAX": {
+      "description": "벼를 옮기러 또다시 밤길을 걷던 성칠이는 어둠 속에서 누군가와 마주친다. 서로를 알아보니, 형님도 동생을 돕기 위해 벼를 옮기고 있었던 것! 두 사람은 서로의 마음을 확인한다.",
+      "choices": [
+        {
+          "action_type": "GOOD",
+          "next_moment_id": "ENDING_GOOD"
+        },
+        {
+          "action_type": "NEUTRAL",
+          "next_moment_id": "ENDING_FUNNY"
+        }
+      ]
+    },
+    "ENDING_GOOD": {
+      "description": "[해피 엔딩] 형제는 서로의 마음을 감사히 여기며 벼를 나누어 먹고, 마을 사람들에게도 의좋은 형제의 미덕이 전해진다."
+    },
+    "ENDING_BAD_A": {
+      "description": "[배드 엔딩] 의심만 품은 채 형님과 대화하지 않고, 혼자서만 벼를 옮기다 결국 지쳐 쓰러지고, 벼도 잃고 관계마저 멀어진다."
+    },
+    "ENDING_FUNNY": {
+      "description": "[재미있는 엔딩] 두 사람이 동시에 벼를 옮기다 서로 놀라 도망치고, 마을에 '벼 도깨비' 소문만 퍼진다."
+    }
+  }
+}
