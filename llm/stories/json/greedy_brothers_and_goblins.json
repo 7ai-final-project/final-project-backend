@@ -1,0 +1,67 @@
+{
+  "id": "greedy_brothers_and_goblins",
+  "world": "욕심과 선함이 교차하는 옛 마을에서, 도깨비와의 만남을 통해 형제가 변화한다.",
+  "start_moment_id": "MOMENT_START",
+  "moments": {
+    "MOMENT_START": {
+      "description": "동생은 늘 집안일을 도맡아 하며, 오늘도 땔감을 구하러 산에 오르게 된다. 형은 빈둥거리며 동생에게 먹을 것도 가져오라며 시킨다. 산속에서 동생은 우연히 개암을 발견하고, 형을 생각하며 주머니에 가득 담는다. 해가 저물고, 동생은 길을 잃은 채 오두막을 발견한다. 날이 어두워지자 동생은 오두막에 들어가 벽에 기대어 앉는다. 그때, 밖에서 이상한 소리가 들려온다.",
+      "choices": [
+        {
+          "action_type": "NEUTRAL",
+          "next_moment_id": "MOMENT_CONFLICT"
+        }
+      ]
+    },
+    "MOMENT_CONFLICT": {
+      "description": "동생은 오두막 안에서 도깨비들이 다가오는 모습을 목격한다. 벽장에 숨은 동생은 도깨비들이 신명나게 잔치를 벌이고, 방망이로 보물을 쏟아내는 모습을 지켜본다. 배가 고파진 동생은 개암을 꺼내 입에 넣으려 한다. 하지만, 도깨비들이 바로 코앞에 있는데, 동생은 어떻게 해야 할지 고민한다.",
+      "choices": [
+        {
+          "action_type": "GOOD",
+          "next_moment_id": "MOMENT_CLIMAX"
+        },
+        {
+          "action_type": "BAD",
+          "next_moment_id": "MOMENT_FAIL_HIDE"
+        }
+      ]
+    },
+    "MOMENT_CLIMAX": {
+      "description": "동생은 조심스럽게 개암을 깨물자, 갑작스러운 소리에 놀란 도깨비들이 허둥지둥 달아난다. 오두막에는 도깨비가 남긴 보물과 방망이가 남아 있다. 날이 밝으면 동생은 이 보물과 방망이를 집으로 가져갈 수 있다. 하지만, 집에 돌아가서 형에게 모든 것을 솔직하게 말할지, 아니면 일부만 나누어줄지 고민하게 된다.",
+      "choices": [
+        {
+          "action_type": "GOOD",
+          "next_moment_id": "ENDING_GOOD"
+        },
+        {
+          "action_type": "NEUTRAL",
+          "next_moment_id": "ENDING_SELFISH"
+        }
+      ]
+    },
+    "MOMENT_FAIL_HIDE": {
+      "description": "동생은 너무 겁에 질려 개암을 먹지 못하고, 벽장에 계속 숨어 있다. 도깨비들은 잔치를 벌이다가 벽장 속에 인기척을 느끼고 다가온다. 숨소리를 들키기 직전, 동생은 어떻게 해야 할지 결정해야 한다.",
+      "choices": [
+        {
+          "action_type": "GOOD",
+          "next_moment_id": "ENDING_ESCAPE"
+        },
+        {
+          "action_type": "BAD",
+          "next_moment_id": "ENDING_BAD_A"
+        }
+      ]
+    },
+    "ENDING_GOOD": {
+      "description": "[해피 엔딩] 동생은 보물과 도깨비방망이를 모두 형과 나누며, 지난밤의 일을 솔직하게 이야기한다. 형은 자신의 욕심을 반성하고, 이후 동생을 아끼며 서로 도우며 살아간다. 형제는 도깨비 덕분에 오순도순 재미나게 살아간다."
+    },
+    "ENDING_SELFISH": {
+      "description": "[재미있는 엔딩] 동생은 보물 일부만 형과 나누고, 나머지는 혼자 챙긴다. 형은 의심을 품고 자신도 산에 올라가지만, 도깨비에게 들켜 혼쭐이 난다. 결국 형은 욕심을 버리고 동생과 화해하며 살아간다."
+    },
+    "ENDING_ESCAPE": {
+      "description": "[짧은 엔딩] 동생은 재빠르게 오두막을 빠져나와 산길을 달려 집으로 돌아온다. 보물은 얻지 못했지만, 무사히 살아남은 것에 감사하며 이후 더욱 조심스럽게 살아간다."
+    },
+    "ENDING_BAD_A": {
+      "description": "[배드 엔딩] 동생은 벽장에 숨어 있다가 도깨비에게 들키고, 크게 혼이 난다. 겨우 집으로 돌아오지만, 두려움에 산에 가지 못하고 형과도 멀어진다. 욕심과 두려움이 행복을 멀어지게 했다는 교훈을 남긴다."
+    }
+  }
+}
