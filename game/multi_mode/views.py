@@ -23,20 +23,21 @@ from game.serializers import (
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
-from .. import scenarios_turn, scenarios_realtime
+from .. import scenarios_turn
 
 def get_scene_templates(request):
     """
-    모든 씬 데이터를 JSON으로 반환
+    턴제 모드의 씬 데이터만 JSON으로 반환하도록 수정
+    (실시간 모드는 이제 WebSocket Consumer가 LLM으로 직접 생성)
     """
-    mode = request.GET.get("mode", "realtime")
+    mode = request.GET.get("mode", "turn_based") # 기본값을 turn_based로 변경
 
     source_templates = None
     if mode == "turn_based":
         source_templates = scenarios_turn.SCENE_TEMPLATES
     else:
-        # 기본값은 realtime 모드
-        source_templates =scenarios_realtime.SCENE_TEMPLATES
+        # 실시간 모드는 더 이상 여기서 데이터를 제공하지 않음
+        return JsonResponse({"scenes": [], "message": "Realtime mode is now handled by WebSocket."}, status=404)
 
     data = [tpl for tpl in source_templates]
 

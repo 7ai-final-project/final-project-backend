@@ -180,10 +180,13 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6379/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
     }
 }
-
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases

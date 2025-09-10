@@ -10,8 +10,8 @@ from game.story_mode.views import (
 )
 from game.multi_mode.views import (
     RoomListCreateView, RoomDetailView, JoinRoomView, LeaveRoomView, 
-    ToggleReadyView, StartMultiGameView, EndMultiGameView, get_scene_templates,
-    ScenarioListView, GenreListView, DifficultyListView, ModeListView,
+    ToggleReadyView, StartMultiGameView, EndMultiGameView,
+    ScenarioListView, GenreListView, DifficultyListView, ModeListView, get_scene_templates,
     GameRoomSelectScenarioView, CharacterListView
 )
 
