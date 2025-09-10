@@ -7,7 +7,9 @@ from django.conf import settings
 class Story(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=200)
+    title_eng = models.CharField(max_length=200, null=True, blank=True)
     description = models.TextField(null=True, blank=True)
+    description_eng = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     # Django 모델에서 ForeignKey나 OneToOneField, ManyToManyField 등을 정의할 때, 참조하려는 모델 클래스가 아직 정의되지 않았을 경우(즉, 현재 파일의 아래쪽에 정의될 경우)에는 문자열로 모델 이름을 지정
     start_moment = models.ForeignKey('StorymodeMoment', on_delete=models.SET_NULL, null=True, blank=True, related_name='start_of_stories')
@@ -25,7 +27,9 @@ class StorymodeMoment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     story = models.ForeignKey(Story, on_delete=models.CASCADE, related_name='moments')
     title = models.CharField(max_length=100)
+    title_eng = models.CharField(max_length=100, null=True, blank=True)
     description = models.TextField(null=True, blank=True)
+    description_eng = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     image_path = models.CharField(max_length=500, null=True, blank=True)
 
@@ -118,7 +122,7 @@ class GameRoom(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='waiting')         # waiting, play, finish
     room_type = models.CharField(max_length=20, choices=ROOM_TYPE_CHOICES, default='public')    # public, private
     created_at = models.DateTimeField(auto_now_add=True)
-    #deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     max_players = models.IntegerField(default=1)
     password = models.CharField(max_length=128, null=True, blank=True)
     is_deleted = models.BooleanField(default=False)
@@ -149,10 +153,39 @@ class Genre(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)    # 판타지, 미스터리, 사이버펑크
     is_display = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'genre'
+
+    def __str__(self):
+        return self.name
+    
+# 난이도
+class Difficulty(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=50, unique=True)     # 초급, 중급, 상급
+    is_display = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'difficulty'
+
+    def __str__(self):
+        return self.name
+
+# 모드
+class Mode(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=50, unique=True)     # 동시 선택, 턴제
+    is_display = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'mode'
 
     def __str__(self):
         return self.name
@@ -163,6 +196,7 @@ class Scenario(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField(null=True, blank=True)
     is_display = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -180,6 +214,8 @@ class Character(models.Model):
     items = models.JSONField(default=dict)
     ability = models.JSONField(default=dict)
     image_path = models.CharField(max_length=500, null=True, blank=True)
+    is_display = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'character'
@@ -202,32 +238,6 @@ class GameRoomSelectScenario(models.Model):
 
     def __str__(self):
         return f"Room {self.gameroom.name} selected {self.scenario.title}"
-
-# 난이도
-class Difficulty(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=50, unique=True)     # 초급, 중급, 고급
-    is_display = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = 'difficulty'
-
-    def __str__(self):
-        return self.name
-
-# 모드
-class Mode(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=50, unique=True)     # 동시선택, 턴제
-    is_display = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = 'mode'
-
-    def __str__(self):
-        return self.name
 
 # 세션 모델
 class BaseSession(models.Model):
