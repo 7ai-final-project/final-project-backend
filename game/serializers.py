@@ -48,7 +48,7 @@ class GameRoomSerializer(serializers.ModelSerializer):
             "status",
             "selected_by_room",
             "created_at",
-            # 'deleted_at',
+            'deleted_at',
             "room_type",
             "password",
             "is_deleted",
