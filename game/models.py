@@ -118,6 +118,7 @@ class GameRoom(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='waiting')         # waiting, play, finish
     room_type = models.CharField(max_length=20, choices=ROOM_TYPE_CHOICES, default='public')    # public, private
     created_at = models.DateTimeField(auto_now_add=True)
+    #deleted_at = models.DateTimeField(null=True, blank=True)
     max_players = models.IntegerField(default=1)
     password = models.CharField(max_length=128, null=True, blank=True)
     is_deleted = models.BooleanField(default=False)

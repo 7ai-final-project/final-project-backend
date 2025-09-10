@@ -6,7 +6,7 @@ from channels.db import database_sync_to_async
 
 from django.contrib.auth.models import AnonymousUser
 
-from game.models import GameRoom,GameJoin
+from game.models import GameRoom, GameJoin, GameRoomSelectScenario
 from game.serializers import GameJoinSerializer
 from .scenarios_turn import get_scene_template
 from .round import perform_round_judgement, perform_turn_judgement
@@ -38,9 +38,9 @@ def _toggle_ready(room_id, user):
 
 
 @database_sync_to_async
-def _serialize_participants(room_id):
+def _serialize_selected_by_room(room_id):
     qs = (
-        GameJoin.objects.filter(gameroom_id=room_id)
+        GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True)
         .select_related("user")
         .order_by("joined_at", "id")
     )
@@ -109,23 +109,38 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({"type": "error", "message": "방장만 게임을 시작할 수 있습니다."})
                 return
 
-            # ✅ 상태 변경 (waiting → paly)
-            room.status = "paly"
+            try:
+                # database_sync_to_async 데코레이터와 함께 사용할 쿼리 함수 정의
+                @database_sync_to_async
+                def get_selected_options(room_id):
+                    # related_name을 사용하여 역참조
+                    return GameRoomSelectScenario.objects.select_related(
+                        'scenario', 'difficulty', 'mode', 'genre'
+                    ).get(gameroom_id=room_id)
+
+                selected_options = await get_selected_options(self.room_id)
+            
+            except GameRoomSelectScenario.DoesNotExist:
+                await self.send_json({"type": "error", "message": "게임 옵션이 선택되지 않았습니다."})
+                return
+
+            # ✅ 상태 변경 (waiting → play)
+            room.status = "play"
             await database_sync_to_async(room.save)(update_fields=["status"])
 
             # ✅ 모든 클라이언트에 브로드캐스트
-            topic = content.get("topic")
-            difficulty = content.get("difficulty")
+            # 💡 수정: 프론트에서 받은 값이 아닌, DB에서 조회한 값을 사용합니다.
             await self.channel_layer.group_send(
                 self.group_name,
                 {
                     "type": "room_broadcast",
                     "message": {
                         "event": "game_start",
-                        # [수정 🔥] UUID 객체를 JSON으로 보내기 위해 str()로 변환합니다.
                         "roomId": str(self.room_id),
-                        "topic": topic,
-                        "difficulty": difficulty
+                        "topic": selected_options.scenario.title,
+                        "difficulty": selected_options.difficulty.name,
+                        "mode": selected_options.mode.name, # mode도 추가
+                        "genre": selected_options.genre.name,
                     },
                 },
             )
@@ -149,24 +164,24 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({"type": "error", "message": "방장만 게임을 종료할 수 있습니다."})
                 return
 
-            # ✅ 상태 변경 (paly → waiting)
+            # ✅ 상태 변경 (play → waiting)
             room.status = "waiting"
             # ✅ 모든 참가자의 is_ready 상태를 False로 초기화
-            await database_sync_to_async(room.participants.update)(is_ready=False)
+            await database_sync_to_async(room.selected_by_room.update)(is_ready=False)
             await database_sync_to_async(room.save)(update_fields=["status"])
 
             # ✅ 모든 클라이언트에 브로드캐스트 (상태 갱신을 위해)
             await self._broadcast_state()
 
     async def _broadcast_state(self):
-        participants = await _serialize_participants(self.room_id)
+        selected_by_room = await _serialize_selected_by_room(self.room_id)
         await self.channel_layer.group_send(
             self.group_name,
-            {"type": "room_state", "participants": participants},
+            {"type": "room_state", "selected_by_room": selected_by_room},
         )
 
     async def room_state(self, event):
-        await self.send_json({"type": "room_state", "participants": event["participants"]})
+        await self.send_json({"type": "room_state", "selected_by_room": event["selected_by_room"]})
 
     async def room_broadcast(self, event):
         # broadcast 메시지를 클라이언트로 그대로 전달

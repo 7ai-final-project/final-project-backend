@@ -5,7 +5,7 @@ import os
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from django.db import transaction
-from game.models import Story, Scene, Choice
+from game.models import Story, StorymodeMoment, StorymodeChoice
 
 class Command(BaseCommand):
     help = 'JSON 파일들로부터 여러 스토리 데이터를 자동으로 데이터베이스에 시딩합니다.'
@@ -17,8 +17,8 @@ class Command(BaseCommand):
         # 기존 데이터를 모두 삭제하여 중복을 방지합니다.
         self.stdout.write(self.style.WARNING('기존의 모든 Story, Scene, Choice 데이터를 삭제합니다.'))
         Story.objects.all().delete()
-        Scene.objects.all().delete()
-        Choice.objects.all().delete()
+        StorymodeMoment.objects.all().delete()
+        StorymodeChoice.objects.all().delete()
 
         stories_dir = os.path.join(settings.BASE_DIR, 'llm', 'stories', 'json')
 
@@ -49,7 +49,7 @@ class Command(BaseCommand):
                     # 2. Scene 객체들 생성
                     scene_objects = {}
                     for scene_name, scene_data in data['moments'].items():
-                        scene, _ = Scene.objects.update_or_create(
+                        scene, _ = StorymodeMoment.objects.update_or_create(
                             story=story,
                             name=scene_name,
                             defaults={'description': scene_data['description']}
@@ -65,7 +65,7 @@ class Command(BaseCommand):
                             for choice_data in scene_data['choices']:
                                 choice_text = choice_data.get('description') or choice_data.get('action_type', '계속')
                                 
-                                Choice.objects.update_or_create(
+                                StorymodeChoice.objects.update_or_create(
                                     scene=parent_scene,
                                     next_scene_name=choice_data['next_moment_id'],
                                     text=choice_text, # text 필드는 중복될 수 있으므로 defaults가 아닌 식별자로 사용

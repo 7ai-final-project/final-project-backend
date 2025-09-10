@@ -27,7 +27,7 @@ class NonceJWTAuthMiddleware: # ✅ 클래스 이름 변경 (더 명확하게)
                     user = await self.get_user(user_id)
                     if user and not user.is_anonymous:
                         scope["user"] = user
-                        print("✅ Nonce 인증 성공:", user.name)
+                        print("✅ Nonce 인증 성공:", user.email)
                         # ✅ 일회성 인증이므로 사용 후 즉시 삭제
                         cache.delete(nonce[0]) 
                     else:

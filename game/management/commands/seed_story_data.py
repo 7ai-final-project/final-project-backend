@@ -1,13 +1,13 @@
 from django.core.management.base import BaseCommand
-from game.models import Story, Scene, Choice
+from game.models import Story, StorymodeMoment, StorymodeChoice
 
 class Command(BaseCommand):
     help = 'Seeds the database with story-based game data.'
 
     def handle(self, *args, **options):
         self.stdout.write(self.style.SUCCESS('Deleting old story data...'))
-        Choice.objects.all().delete()
-        Scene.objects.all().delete()
+        StorymodeChoice.objects.all().delete()
+        StorymodeMoment.objects.all().delete()
         Story.objects.all().delete()
 
        # --- 1단계: 새로운 "스토리" 정보 추가 ---
@@ -37,7 +37,7 @@ class Command(BaseCommand):
             {'story': sun_moon_story, 'name': 'sun_and_moon_bad_ending', 'description': "안타깝게도, 오누이는 결국 호랑이에게 잡히고 말았다...", 'image_path': 'scene_bad_end.png'}
         ]
         # 생성된 Scene 객체들을 딕셔너리에 저장하는 방식이 조금 더 명확하게 변경되었습니다.
-        scenes = {data['name']: Scene.objects.create(**data) for data in scenes_data}
+        scenes = {data['name']: StorymodeMoment.objects.create(**data) for data in scenes_data}
 
 
         # --- 3단계: 기존 "선택지" 데이터가 올바른 "장면"을 참조하도록 수정 ---
@@ -63,6 +63,6 @@ class Command(BaseCommand):
         ]
 
         for data in choices_data:
-            Choice.objects.create(**data)
+            StorymodeChoice.objects.create(**data)
 
         self.stdout.write(self.style.SUCCESS('Successfully seeded all story data!'))
