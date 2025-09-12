@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from game.models import (
     StorymodeMoment, StorymodeChoice, Story, GameRoom, GameJoin,
-    Scenario, Genre, Difficulty, Mode, GameRoomSelectScenario,Character
+    Scenario, Genre, Difficulty, Mode, GameRoomSelectScenario,Character, MultimodeSession
 )
 from django.contrib.auth.hashers import make_password
 
@@ -48,7 +48,7 @@ class GameRoomSerializer(serializers.ModelSerializer):
             "status",
             "selected_by_room",
             "created_at",
-            'deleted_at',
+            #'deleted_at',
             "room_type",
             "password",
             "is_deleted",
@@ -139,3 +139,40 @@ class CharacterSerializer(serializers.ModelSerializer):
         .get()을 사용하여 'skills' 키가 없는 경우에도 에러 없이 빈 리스트([])를 반환합니다.
         """
         return obj.ability.get('skills', [])
+    
+class MultimodeSessionSerializer(serializers.ModelSerializer):
+    scenario = serializers.StringRelatedField()
+    # ✅ [추가] difficulty, genre, mode 이름을 가져올 필드를 정의합니다.
+    difficulty = serializers.SerializerMethodField()
+    genre = serializers.SerializerMethodField()
+    mode = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MultimodeSession
+        # ✅ [수정] 새로 추가한 필드들을 fields 목록에 포함합니다.
+        fields = [
+            'id', 'scenario', 'choice_history', 'character_history', 'status',
+            'difficulty', 'genre', 'mode' 
+        ]
+
+    def get_game_options(self, obj):
+        """세션의 게임룸에 연결된 게임 옵션을 가져오는 헬퍼 함수"""
+        try:
+            # obj는 MultimodeSession 인스턴스입니다. obj.gameroom을 통해 연결된 옵션을 찾습니다.
+            return GameRoomSelectScenario.objects.select_related(
+                'difficulty', 'genre', 'mode'
+            ).get(gameroom=obj.gameroom)
+        except GameRoomSelectScenario.DoesNotExist:
+            return None
+
+    def get_difficulty(self, obj):
+        options = self.get_game_options(obj)
+        return options.difficulty.name if options and options.difficulty else None
+
+    def get_genre(self, obj):
+        options = self.get_game_options(obj)
+        return options.genre.name if options and options.genre else None
+
+    def get_mode(self, obj):
+        options = self.get_game_options(obj)
+        return options.mode.name if options and options.mode else None

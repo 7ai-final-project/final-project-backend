@@ -12,7 +12,7 @@ from game.multi_mode.views import (
     RoomListCreateView, RoomDetailView, JoinRoomView, LeaveRoomView, 
     ToggleReadyView, StartMultiGameView, EndMultiGameView,
     ScenarioListView, GenreListView, DifficultyListView, ModeListView, get_scene_templates,
-    GameRoomSelectScenarioView, CharacterListView
+    GameRoomSelectScenarioView, CharacterListView, MySessionDetailView
 )
 
 urlpatterns = [
@@ -30,6 +30,7 @@ urlpatterns = [
     path("<uuid:pk>/start/", StartMultiGameView.as_view(), name="room-start"),
     path("<uuid:pk>/end/", EndMultiGameView.as_view(), name="room-end"),
     path("api/scenes/", get_scene_templates, name="multi_api_scenes"),
+    path("<uuid:pk>/my-session/", MySessionDetailView.as_view(), name="my-session-detail"),
 
     path("options/scenarios/", ScenarioListView.as_view(), name="scenario-list"),
     path("options/genres/", GenreListView.as_view(), name="genre-list"),
