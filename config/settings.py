@@ -17,6 +17,12 @@ from datetime import timedelta
 
 load_dotenv()
 
+# AZURE_BLOB_STORAGE_CONNECT_KEY = os.getenv('AZURE_BLOB_STORAGE_CONNECT_KEY')
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_VERSION = os.getenv("AZURE_OPENAI_VERSION")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 

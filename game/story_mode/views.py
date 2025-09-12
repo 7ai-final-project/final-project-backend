@@ -1,268 +1,369 @@
-# backend/game/story_mode/views.py
+import re
+import json
+from openai import AzureOpenAI
+from django.conf import settings
+from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
-import logging
-from llm.story_mode.services import generate_single_play_step, stories
+from game.models import Story
+from game.serializers import StorySerializer
 
-logger = logging.getLogger(__name__)
+AZURE_OPENAI_API_KEY = settings.AZURE_OPENAI_API_KEY
+AZURE_OPENAI_ENDPOINT = settings.AZURE_OPENAI_ENDPOINT
+AZURE_OPENAI_VERSION = settings.AZURE_OPENAI_VERSION
+AZURE_OPENAI_DEPLOYMENT = settings.AZURE_OPENAI_DEPLOYMENT
 
-class StoryListView(APIView):
-    def get(self, request):
-        return Response(stories)
+# Azure OpenAI 클라이언트 초기화
+def get_azure_openai_client() :
+    try :
+        return AzureOpenAI(
+            api_key=AZURE_OPENAI_API_KEY,
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            api_version=AZURE_OPENAI_VERSION
+        )
+    except Exception as e :
+        print(f'Azure OpenAI 클라이언트 초기화 실패 {e}')
+        return None
 
-class StartGameView(APIView):
-    def post(self, request):
-        story_id = request.data.get('story_id')
-        if not story_id:
-            return Response({"error": "story_id가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+# AI 응답 파싱
+def parse_ai_response(llm_output):
+    if not llm_output:
+        print("파싱 오류: AI로부터 받은 내용이 비어있습니다(None).")
+        return {"scene_text": "(AI로부터 응답을 받지 못했습니다. Azure 콘텐츠 필터 문제일 수 있습니다.)", "choices": []}
+    
+    try:
+        cleaned = re.sub(r"```json|```", "", llm_output).strip()
+        cleaned = cleaned.replace('\n', ' ').replace('\r', ' ')
+                
+        if cleaned.startswith("{{") and cleaned.endswith("}}"):
+            cleaned = cleaned[1:-1]
+            
+        data = json.loads(cleaned)
         
-        try:
-            story = stories.get(story_id)
-             # character_id = request.data.get('character')
+        return {
+            "scene_text": data.get("scene_text"), 
+            "choices": data.get("choices", [])
+        }
+    except Exception as e:
+        print(f"JSON 파싱 실패: {e}\n원본 출력: {llm_output}")
+        return {
+            "scene_text": f"(AI 응답 오류: {llm_output})", 
+            "choices": []
+        }
 
-            # if not story_id:
-            #     return Response({"error": "storyId가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
-            # if not character_id:
-            #     return Response({"error": "character가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
-            if not story: return Response({"error": "스토리를 찾을 수 없습니다."}, status=404)
-            start_moment_id = story.get('start_moment_id')
-            if not start_moment_id: return Response({"error": "시작 지점이 정의되지 않았습니다."}, status=500)
+# 전체 스토리 DB 조회
+class StoryListView(APIView) :
+    def get(self, request) :
+        try :
+            stories = Story.objects.filter(is_display=True, is_deleted=False)
+            serializer = StorySerializer(stories, many=True)
+            print('stories', serializer.data)
+            return Response({
+                'message' : '스토리 목록 조회 성공',
+                'stories' : serializer.data
+            }, status=status.HTTP_200_OK)
+        except Exception as e :
+            print(f"🛑 오류: 스토리 목록을 조회하는 데 실패했습니다. 오류: {e}")
+            return Response({
+                'message' : '스토리 목록 조회 실패'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            ai_response = generate_single_play_step(
-                story_id=story_id,
-                current_moment_id=start_moment_id,
+# 공통 로직 APIView
+class BaseStoryModeView(APIView) :
+    # 스토리 조회
+    def _get_story_data(self, story_title) :
+        try :
+            story = Story.objects.filter(
+                title=story_title,
+                is_display=True,
+                is_deleted=False
+            ).prefetch_related('moments__choices').first()
+
+            if not story :
+                return Response({
+                    'message' : '선택된 스토리를 찾을 수 없습니다.'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            moments_data = {}
+            for moment in story.moments.all() :
+                choices_data = []
+                for choice in moment.choices.all() :
+                    # 선택지 정보
+                    choices_data.append({
+                        'action_type' : choice.action_type,
+                        'next_moment_id' : str(choice.next_moment.id) if choice.next_moment else None
+                    })
+                
+                # 분기점 정보
+                moments_data[str(moment.id)] = {
+                    'title' : moment.title,
+                    'description' : moment.description,
+                    'choices' : choices_data,
+                    # 'image_path' : moment.image_path
+                }
+
+            # 스토리 정보
+            story_data  = {
+                'id' : str(story.id),
+                'title' : story.title,
+                'title_eng' : story.title_eng,
+                'description' : story.description,
+                'content' : {
+                    'start_moment_id' : str(story.start_moment.id) if story.start_moment else None,
+                    'start_moment_title' : story.start_moment.title if story.start_moment else None,
+                    'moments' : moments_data
+                },
+                'is_display' : story.is_display,
+                'is_deleted' : story.is_deleted
+            }
+
+            return story_data, None
+        except Exception as e :
+            print(f"🛑 오류: 스토리 목록을 조회하는 데 실패했습니다. 오류: {e}")
+            return None, Response({
+                'message' : '스토리 목록 조회 실패'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    # AI 프롬프트 생성
+    def _generate_story_prompt(self, story_title, player_action_text, moment_description, choice_instructions, is_ending, num_choices_available=0) :
+        mission_part = ''
+        response_format_part = ''
+
+        if is_ending :
+            mission_part = """
+            2.  **이야기 마무리:** 이 장면은 이야기의 끝입니다. 아이가 동화 속에서 얻은 교훈이나 감동을 느낄 수 있도록, 3~4 문장으로 아름답게 이야기를 마무리해주세요. **선택지는 절대로 만들지 마세요.**
+            """
+
+            response_format_part = """
+            [응답 형식]
+            반드시 다음 JSON 형식으로만 응답해야 합니다. **choices는 빈 배열([])**이어야 합니다.
+            {{
+                "scene_text": "AI가 '장면 생성'과 '이야기 마무리' 임무에 따라 창작한 감동적인 이야기 내용.",
+                "choices": []
+            }}
+            """
+        else :
+            mission_part = f"""
+            2.  **선택지 생성:** 위에서 만든 장면에 이어서, 아이에게 **{num_choices_available}개의 선택지**를 제시하세요.
+                *   **선택지 형식:** 주인공이 하려는 **'행동'을 직접 나타내는 짧은 문장** 형식이어야 합니다. 아이가 직접 주인공의 행동을 고르는 느낌을 주세요.
+                    *   **(좋은 예시 - 다양한 상황에 적용 가능):**
+                        *   **(모험적인 행동):** "용감하게 동굴로 들어간다."
+                        *   **(대화/관계 행동):** "슬퍼하는 친구를 위로해준다."
+                        *   **(소극적인 행동):** "무서워서 그냥 집으로 돌아간다."
+                    *   **(나쁜 예시 - 스포일러):** "용을 물리치게 될까?", "보물을 찾게 될까?" 와 같이 **결과를 암시하거나 질문하는 형식은 절대 사용하지 마세요.**
+                *   **선택지 내용:** **아래 '선택지 생성 가이드'에 명시된 각 결과로 이어지는 행동을 정확히 반영해야 합니다.** 예를 들어, 가이드가 '[배드 엔딩] 지쳐 쓰러진다'로 이어지라고 지시했다면, 선택지는 반드시 '계속 혼자 벼를 옮긴다' 또는 '무리한다' 와 같은 원인 행동이어야 합니다. **'대화한다'처럼 긍정적인 행동을 배드 엔딩에 연결하면 절대 안 됩니다.**
+                *   **선택지 생성 가이드:** {choice_instructions}
+            """
+
+            response_format_part = """
+            [응답 형식]
+            반드시 다음 JSON 형식으로만 응답해야 합니다:
+            {{
+                "scene_text": "AI가 '장면 생성' 임무에 따라 창작한 이야기 내용.",
+                "choices": ["첫 번째 행동 선택지", "두 번째 행동 선택지", "..."]
+            }}
+            """
+
+        # 최종 프롬프트 템플릿
+        prompt = f"""
+        당신은 아이들에게 동화를 들려주는 다정한 '이야기 요정'입니다. 당신의 임무는 아이의 선택을 반영하여 이야기를 만들면서도, 정해진 핵심 줄거리대로 이야기가 흘러가도록 자연스럽게 유도하는 것입니다.
+
+        [이야기 요정의 규칙]
+        *   항상 다정한 말투를 사용하고, 아이의 눈높이에 맞춰 설명합니다.
+        *   장면을 묘사할 때는 아이가 무엇을 보고, 듣고, 느끼는지에 집중합니다.
+        *   장면의 감각을 극대화하기 위해 의성어와 의태어를 사용합니다. ... (중략) ...
+            *   (원칙 1) 소리를 생생하게: ...
+            *   (원칙 2) 모습과 움직임을 그림처럼: ...
+            *   (원칙 3) 마음과 느낌을 실감 나게: ...
+        *   ★★ (새로 추가할 규칙) ★★ 의성어/의태어는 문장을 생생하게 만들 수 있을 때만 자연스럽게 사용하고, **벼가 익어가는 것처럼 어울리는 표현이 없는 조용한 장면에서는 억지로 사용하지 않아도 괜찮아요.**
+        *   (주의!) 이 모든 표현은 반드시 그 장면에 자연스럽게 어울려야 합니다. '벼가 쿵쾅쿵쾅 익는다'처럼 어색한 표현은 사용하지 않도록 항상 주의해주세요.
+
+        [현재 상황]
+        *   현재 동화: {story_title}
+        *   아이의 행동: {player_action_text}
+
+        [당신의 임무]
+        1.  **장면 생성:** 아래 '이번 장면의 핵심 목표'를 달성하는 다음 장면을 3~4개의 문장으로 흥미롭게 묘사하세요.
+            *   이번 장면의 핵심 목표: {moment_description}
+        {mission_part}
+        {response_format_part}
+        """
+
+        return prompt
+    
+    # OpenAI API 호출
+    def _call_openai_api(self, prompt) :
+        client = get_azure_openai_client()
+        if not client :
+            print(f'Azure OpenAI 클라이언트 초기화 실패')
+            return None, Response({
+                'message' : 'AI 서비스 연결 실패'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        try :
+            response = client.chat.completions.create(
+                model=AZURE_OPENAI_DEPLOYMENT,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7
             )
-            
-            return Response(ai_response, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"StartGameView 오류: {e}")
-            return Response({'error': f'서버 오류가 발생했습니다: {e}'}, status=500)
+            ai_response_content = parse_ai_response(response.choices[0].message.content)
+            print('ai_response_content :', ai_response_content)
+            return ai_response_content, None
+        except Exception as e :
+            print(f'🛑 오류: OpenAI API 호출 또는 응답 처리 실패. 오류: {e}')
+            return None, Response({
+                'message' : 'AI 응답 생성 실패'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class MakeChoiceView(APIView):
-    def post(self, request):
-        story_id = request.data.get("story_id")
-        choice_index = request.data.get("choice_index")
-        current_moment_id = request.data.get("current_moment_id")
+# 선택된 스토리 DB 조회 (첫 페이지)
+class StartGameView(BaseStoryModeView) :
+    def post(self, request) :
+        story_title = request.data.get('story_title')
 
-        if not all([story_id, choice_index is not None, current_moment_id]):
-            return Response({"error": "story_id, choice_index, current_moment_id가 모두 필요합니다."}, status=400)
+        if not story_title :
+            return Response({
+                'message' : '스토리 선택이 필요합니다.'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            ai_response = generate_single_play_step(
-                story_id=story_id,
-                current_moment_id=current_moment_id,
-                choice_index=choice_index,
-            )
-            return Response(ai_response, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"MakeChoiceView 오류: {e}")
-            return Response({'error': f'서버 오류가 발생했습니다: {e}'}, status=500)
+        story_data, error_response = self._get_story_data(story_title)
+        if error_response :
+            return error_response
 
-# from rest_framework.views import APIView
-# from rest_framework.response import Response
-# from rest_framework import status
-# from rest_framework.permissions import IsAuthenticated
-# import logging
+        id = story_data.get('id')
+        title = story_data.get('title')
+        content = story_data.get('content')
+        all_moments = content.get('moments')
 
-# # [수정] 필요한 모델과 서비스만 정확히 import 합니다.
-# from ..models import GamePlaySession, Story, Scene, Choice 
-# from llm.story_mode.services import process_player_choice, generate_ai_scene_from_db, get_total_endings_count
+        current_moment_id = content.get('start_moment_id')
+        current_moments = all_moments.get(current_moment_id)
+        current_moment_title = current_moments.get('title', '')
+        current_moment_description = current_moments.get('description', '')
 
-# logger = logging.getLogger(__name__)
+        choices = current_moments.get('choices', [])
+        is_ending = not bool(choices)
+        num_choices_available = len(choices)
 
-# class StoryListWithProgressView(APIView):
-#     """
-#     DB에 저장된 스토리 목록과 현재 유저의 플레이 기록을 함께 반환합니다.
-#     """
-#     permission_classes = [IsAuthenticated]
-
-#     def get(self, request):
-#         user = request.user
-#         story_list_with_progress = []
-#         all_stories = Story.objects.all()
-
-#         for story in all_stories:
-#             session = GamePlaySession.objects.filter(player=user, story=story).first()
-            
-#             progress_data = {
-#                 "id": story.id,
-#                 "title": story.title,
-#                 "description": story.description,
-#                 "is_played": False,
-#                 "unlocked_endings_count": 0,
-#                 "total_endings_count": get_total_endings_count(story)
-#             }
-
-#             if session:
-#                 progress_data.update({
-#                     "is_played": True,
-#                     "unlocked_endings_count": len(session.unlocked_ending_names),
-#                 })
-            
-#             story_list_with_progress.append(progress_data)
-
-#         return Response(story_list_with_progress)
-
-# class StartGameView(APIView):
-#     """
-#     새로운 게임을 시작하고, DB에 플레이 기록을 생성/초기화합니다.
-#     """
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request):
-#         story_id = request.data.get('story_id')
-#         try:
-#             story = Story.objects.get(pk=story_id)
-#         except Story.DoesNotExist:
-#             return Response({"error": "존재하지 않는 이야기입니다."}, status=status.HTTP_404_NOT_FOUND)
-
-#         # [수정 시작]
-#         # '새로하기' 시에는 엔딩 기록을 초기화하지 않도록 update_or_create 로직을 변경합니다.
-#         session, created = GamePlaySession.objects.get_or_create(
-#             player=request.user,
-#             story=story,
-#             # 'get_or_create'를 사용하여 기존 세션이 있다면 가져오고, 없다면 새로 만듭니다.
-#             # 'defaults'는 'create' 시에만 적용됩니다.
-#         )
+        choice_instructions = ''
+        if not is_ending :
+            choice_instructions += '다음 선택지들은 아래 목표들로 이어지도록 만들어줘:\n'
         
-#         # '새로하기'이므로 게임 진행 관련 필드만 초기화합니다.
-#         session.current_scene = None
-#         session.scene_history = []
-#         session.inventory = []
-#         session.stats = {'wisdom': 0, 'courage': 0}
-#         session.is_completed = False
-#         session.save()
-#         # [수정 끝]
+        for i, choice_info in enumerate(choices):
+            target_moment_id = choice_info.get('next_moment_id')
+            target_moment_desc = all_moments.get(target_moment_id, {}).get('description', '')
+            action_type = choice_info.get('action_type', '보통')
+            choice_instructions += f'- 선택지 {i+1}: ({action_type} 결과) {target_moment_desc}\n'
 
-#         updated_session, next_scene = process_player_choice(session, choice_id=None)
-#         ai_data = generate_ai_scene_from_db(updated_session, next_scene, player_choice=None)
-
-#         return Response({
-#             "scene": ai_data.get("scene_text"),
-#             "choices": ai_data.get("choices"),
-#             "db_choices": list(next_scene.choices.all().values('id', 'text')),
-#             "story_id": story.id,
-#             "current_scene_id": next_scene.id,
-#             "session_data": {
-#                 "inventory": updated_session.inventory,
-#                 "stats": updated_session.stats,
-#             }
-#         }, status=status.HTTP_200_OK)
-
-# class ResumeGameView(APIView):
-#     """ 중단했던 지점부터 게임을 다시 시작(이어하기)합니다. """
-#     permission_classes = [IsAuthenticated]
-
-#     def get(self, request, story_id):
-#         try:
-#             session = GamePlaySession.objects.get(player=request.user, story_id=story_id)
-            
-#             if not session.current_scene:
-#                 return Response({"error": "저장된 기록이 없습니다. '새로하기'로 시작해주세요."}, status=status.HTTP_404_NOT_FOUND)
-            
-#             current_scene = session.current_scene
-            
-#             # 현재 장면으로 AI 텍스트 생성
-#             ai_data = generate_ai_scene_from_db(session, current_scene, player_choice=None)
-            
-#             # 프론트엔드에 필요한 정보 조합
-#             return Response({
-#                 "scene": ai_data.get("scene_text"),
-#                 "choices": ai_data.get("choices"),
-#                 "db_choices": list(current_scene.choices.all().values('id', 'text')),
-#                 "story_id": story_id,
-#                 "current_scene_id": current_scene.id,
-#                 "session_data": {
-#                     "inventory": session.inventory,
-#                     "stats": session.stats
-#                 },
-#                 "is_ending": not current_scene.choices.exists(),
-#             }, status=status.HTTP_200_OK)
-
-#         except GamePlaySession.DoesNotExist:
-#             return Response({"error": "플레이 기록이 없습니다."}, status=status.HTTP_404_NOT_FOUND)
-
-# class MakeChoiceView(APIView):
-#     """
-#     사용자의 선택을 받아 DB 상태를 업데이트하고 다음 장면을 반환합니다.
-#     """
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request):
-#         story_id = request.data.get("story_id")
-#         choice_id = request.data.get("choice_id")
-
-#         if not all([story_id, choice_id]):
-#             return Response({"error": "story_id와 choice_id가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        player_action_text = '이제 이야기가 시작되었어.' 
         
-#         try:
-#             session = GamePlaySession.objects.get(player=request.user, story_id=story_id)
-#         except GamePlaySession.DoesNotExist:
-#             return Response({"error": "플레이 기록이 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        prompt = self._generate_story_prompt(
+            story_title=title,
+            player_action_text=player_action_text,
+            moment_description=current_moment_description,
+            choice_instructions=choice_instructions,
+            is_ending=is_ending,
+            num_choices_available=num_choices_available
+        )
 
-#         updated_session, next_scene = process_player_choice(session, choice_id)
-#         player_choice_obj = Choice.objects.get(pk=choice_id)
-#         ai_data = generate_ai_scene_from_db(updated_session, next_scene, player_choice_obj)
+        ai_response_content, error_response = self._call_openai_api(prompt)
+        if error_response :
+            return error_response
+
+        return Response({
+            "scene": ai_response_content.get("scene_text"),
+            "choices": ai_response_content.get("choices"),
+            "story_id": id,
+            "story_title": title,
+            "current_moment_id": current_moment_id,
+            "current_moment_title": current_moment_title,
+        }, status=status.HTTP_200_OK)        
+
+# 선택된 스토리 DB 조회 (선택지 선택 후, 진행)
+class MakeChoiceView(BaseStoryModeView):
+    def post(self, request) :
+        story_title = request.data.get('story_title')
+        choice_index = request.data.get('choice_index')
+        current_moment_id = request.data.get('current_moment_id')
+
+        if not story_title or current_moment_id is None :
+            return Response({
+                'message' : 'story_title 혹은 current_moment_id 누락'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if choice_index is None :
+            return Response({
+                'message' : 'choice_index 누락'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        story_data, error_response = self._get_story_data(story_title)
+        if error_response :
+            return error_response
         
-#         # [핵심 수정!] 엔딩 도달 여부를 확인하고 DB에 기록합니다.
-#         # 다음 장면에 선택지가 없다면(is_ending), 엔딩으로 간주합니다.
-#         is_ending = not next_scene.choices.exists()
-#         if is_ending:
-#             # 이미 본 엔딩이 아니라면, unlocked_ending_names 목록에 추가합니다.
-#             if next_scene.name not in updated_session.unlocked_ending_names:
-#                  updated_session.unlocked_ending_names.append(next_scene.name)
-#                  updated_session.is_completed = True # 스토리 완료 상태로 변경
-#                  updated_session.save() # 변경사항을 DB에 최종 저장!
+        id = story_data.get('id')
+        title = story_data.get('title')
+        content = story_data.get('content')
+        all_moments = content.get('moments')
 
-#         return Response({
-#             "scene": ai_data.get("scene_text"),
-#             "choices": ai_data.get("choices"),
-#             "db_choices": list(next_scene.choices.all().values('id', 'text')),
-#             "story_id": story_id,
-#             "current_scene_id": next_scene.id,
-#             "session_data": {
-#                 "inventory": updated_session.inventory,
-#                 "stats": updated_session.stats,
-#             },
-#             "is_ending": is_ending, # [추가] 프론트엔드에 현재 장면이 엔딩인지 알려줌
-#         }, status=status.HTTP_200_OK)
+        # 다음 장면 ID 결정
+        current_moments = all_moments.get(current_moment_id)
+        if not current_moments :
+            return Response({
+                'message' : '현재 장면 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        choices_map = current_moments.get('choices')
+        next_moment_id = current_moment_id
+        if 0 <= choice_index < len(choices_map) :
+            next_moment_id = choices_map[choice_index].get('next_moment_id')
+        else :
+            return Response({
+                'message' : '유효하지 않은 선택입니다.'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-# class UndoChoiceView(APIView):
-#     """
-#     가장 마지막 선택을 취소하고 이전 상태로 돌아갑니다.
-#     """
-#     permission_classes = [IsAuthenticated]
+        next_moments = all_moments.get(next_moment_id)
+        if not next_moments :
+            return Response({
+                'message' : '다음 장면 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        next_moment_title = next_moments.get('title', '')
+        next_moment_description = next_moments.get('description', '')
 
-#     def post(self, request):
-#         story_id = request.data.get('story_id')
-#         try:
-#             session = GamePlaySession.objects.get(player=request.user, story_id=story_id)
-            
-#             if len(session.scene_history) < 2:
-#                 return Response({"error": "더 이상 뒤로 갈 수 없습니다."}, status=status.HTTP_400_BAD_REQUEST)
-            
-#             session.scene_history.pop() # 현재 장면을 히스토리에서 제거
-#             previous_scene_id = session.scene_history[-1]
-#             previous_scene = Scene.objects.get(pk=previous_scene_id)
-            
-#             session.current_scene = previous_scene
-#             # 참고: 이 방식은 아이템/스탯 변화를 되돌리지는 않습니다.
-#             session.save()
-            
-#             ai_data = generate_ai_scene_from_db(session, previous_scene, player_choice=None)
-            
-#             return Response({
-#                 "scene": ai_data.get("scene_text"),
-#                 "choices": ai_data.get("choices"),
-#                 "db_choices": list(previous_scene.choices.all().values('id', 'text')),
-#                 "story_id": story_id,
-#                 "current_scene_id": previous_scene.id,
-#                 "session_data": {
-#                     "inventory": session.inventory,
-#                     "stats": session.stats
-#                 }
-#             }, status=status.HTTP_200_OK)
-            
-#         except GamePlaySession.DoesNotExist:
-#             return Response({"error": "플레이 기록이 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        choices = next_moments.get('choices', [])
+        is_ending = not bool(choices)
+        num_choices_available = len(choices)
+
+        choice_instructions = ''
+        if not is_ending :
+            choice_instructions += '다음 선택지들은 아래 목표들로 이어지도록 만들어줘:\n'
+
+            for i, choice_info in enumerate(choices):
+                target_moment_id = choice_info.get('next_moment_id')
+                target_moment_desc = all_moments.get(target_moment_id, {}).get('description', '')
+                action_type = choice_info.get('action_type', '보통')
+                choice_instructions += f'- 선택지 {i+1}: ({action_type} 결과) {target_moment_desc}\n'
+        else:
+            choice_instructions = "이야기의 끝입니다. 선택지가 필요 없습니다."
+
+        player_action_text = f"플레이어가 {choice_index + 1}번째 선택지를 골랐어."
+        
+        prompt = self._generate_story_prompt(
+            story_title=title,
+            player_action_text=player_action_text,
+            moment_description=next_moment_description,
+            choice_instructions=choice_instructions,
+            is_ending=is_ending,
+            num_choices_available=num_choices_available
+        )
+
+        ai_response_content, error_response = self._call_openai_api(prompt)
+        if error_response :
+            return error_response
+
+        return Response({
+            "scene": ai_response_content.get("scene_text"),
+            "choices": ai_response_content.get("choices"),
+            "story_id": id,
+            "story_title": title,
+            "current_moment_id": next_moment_id,
+            "current_moment_title": next_moment_title,
+        }, status=status.HTTP_200_OK)

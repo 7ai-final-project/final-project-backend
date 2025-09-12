@@ -20,7 +20,7 @@ class SceneSerializer(serializers.ModelSerializer):
 class StorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Story
-        fields = ['id', 'title', 'description']
+        fields = ['id', 'title', 'title_eng', 'description', 'description_eng', 'start_moment', 'is_display', 'is_deleted']
 
 class GameJoinSerializer(serializers.ModelSerializer):
     username = serializers.ReadOnlyField(source="user.name")
