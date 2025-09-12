@@ -7,13 +7,13 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.core.cache import cache
 
-from openai import AzureOpenAI
+from openai import AsyncAzureOpenAI
 import os
 from dotenv import load_dotenv
 
 from django.contrib.auth.models import AnonymousUser
 
-from game.models import GameRoom, GameJoin, GameRoomSelectScenario, Scenario, Character
+from game.models import MultimodeSession, GameRoom, GameJoin, GameRoomSelectScenario, Scenario, Character
 from game.serializers import GameJoinSerializer
 from .scenarios_turn import get_scene_template
 from .round import perform_turn_judgement
@@ -23,7 +23,7 @@ from .state import GameState
 load_dotenv()
 
 # LLM 클라이언트 초기화
-oai_client = AzureOpenAI(
+oai_client = AsyncAzureOpenAI(
     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
     api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     api_version=os.getenv("AZURE_OPENAI_VERSION", "2025-01-01-preview"),
@@ -390,15 +390,28 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         if msg_type == "request_initial_scene":
             scenario_title = content.get("topic")
             characters_data = content.get("characters", [])
-            await self.handle_start_game_llm(scenario_title, characters_data)
+            # ✅ [수정] 빠져있던 user 인자를 추가하여 함수를 호출합니다.
+            await self.handle_start_game_llm(user, scenario_title, characters_data)
 
         elif msg_type == "submit_choice":
-            # 플레이어가 선택지를 골랐을 때
             choice_data = content.get("choice")
             await self.handle_player_choice(user, choice_data)
 
-    async def handle_start_game_llm(self, scenario_title, characters_data):
-        """LLM을 사용하여 게임의 첫 번째 씬(JSON)을 생성"""
+        elif msg_type == "save_game_state":
+            save_data = content.get("data")
+            if user.is_authenticated and save_data:
+                await self.handle_save_game_state(user, save_data)
+
+    async def handle_start_game_llm(self, user, scenario_title, characters_data):
+        """LLM을 사용하여 게임의 첫 번째 씬(JSON)을 생성하고, 이전 기록을 초기화"""
+        
+        # ✅ [추가] 새 게임이 시작될 때, DB에 저장된 이전 기록을 초기화합니다.
+        if user.is_authenticated:
+            await self.clear_previous_session_history(user)
+
+        # ✅ [추가] 요약용 캐시도 함께 비웁니다.
+        cache.delete(f"room_{self.room_id}_choice_log")
+        
         scenario = await self.get_scenario_from_db(scenario_title)
         if not scenario:
             await self.send_error_message(f"시나리오 '{scenario_title}'를 찾을 수 없습니다.")
@@ -411,64 +424,214 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         scene_json = await self.ask_llm_for_scene_json(initial_history, user_message)
 
         if scene_json:
-            # 생성된 첫 씬 데이터를 모든 클라이언트에게 전송
-            await self.broadcast_to_group({
-                "event": "scene_update",
-                "scene": scene_json,
-            })
+            await self.broadcast_to_group({ "event": "scene_update", "scene": scene_json })
+
+    # ✅ [추가] 이전 세션 기록을 DB에서 초기화하는 메서드
+    async def clear_previous_session_history(self, user):
+        """데이터베이스에서 해당 유저와 게임방의 choice_history를 비웁니다."""
+        await self._clear_history_in_db(user, self.room_id)
+
+    # ... handle_player_choice, _summarize_with_llm, handle_save_game_state, _save_to_db 등
+    # ... 다른 메서드들은 기존 코드와 동일하게 유지 ...
+    
+    # ✅ [추가] DB 작업을 위한 비동기 헬퍼 함수
+    @database_sync_to_async
+    def _clear_history_in_db(self, user, room_id):
+        try:
+            gameroom = GameRoom.objects.get(id=room_id)
+            session = MultimodeSession.objects.filter(user=user, gameroom=gameroom).first()
+            
+            if session:
+                session.choice_history = []
+                session.save(update_fields=['choice_history'])
+                print(f"✅ DB 기록 초기화 성공: User {user.name}, Room {room_id}")
+        except GameRoom.DoesNotExist:
+            print(f"⚠️ DB 기록 초기화 경고: Room {room_id}를 찾을 수 없습니다.")
+        except Exception as e:
+            print(f"❌ DB 기록 초기화 중 오류 발생: {e}")
 
     async def handle_player_choice(self, user, choice_data):
         """플레이어의 선택을 기반으로 LLM에게 다음 씬(JSON)을 요청"""
+        # ... (이 함수는 수정사항이 없습니다)
         state = await GameState.get_game_state(self.room_id)
         history = state.get("conversation_history", [])
-        
-        username = getattr(user, 'name', user.username)
-        # LLM에게 어떤 플레이어가 어떤 선택을 했는지 명확히 알려줌
+        username = user.name
         user_message = f"""
         플레이어 '{username}' (역할: {choice_data['role']})가 이전 씬에서 다음 선택지를 골랐어:
         - 선택지 ID: "{choice_data['choiceId']}"
         - 선택지 내용: "{choice_data['text']}"
-
         이 선택의 결과를 반영해서, 다음 씬(sceneIndex: {choice_data['sceneIndex'] + 1})의 JSON 데이터를 생성해줘.
         """
         scene_json = await self.ask_llm_for_scene_json(history, user_message)
-
         if scene_json:
-            await self.broadcast_to_group({
-                "event": "scene_update",
-                "scene": scene_json,
-            })
+            await self.broadcast_to_group({ "event": "scene_update", "scene": scene_json })
 
+    async def _summarize_with_llm(self, text: str) -> str:
+        """주어진 텍스트를 LLM을 사용해 한두 문장으로 요약합니다."""
+        if not text:
+            return "아직 기록된 행동이 없습니다."
+        
+        try:
+            summary_prompt = [
+                {"role": "system", "content": "너는 플레이 로그를 분석하고 핵심만 간결하게 한 문장으로 요약하는 AI다."},
+                {"role": "user", "content": f"다음 게임 플레이 기록을 한 문장으로 요약해줘:\n\n{text}"}
+            ]
+            completion = await oai_client.chat.completions.create(
+                model=OAI_DEPLOYMENT,
+                messages=summary_prompt,
+                max_tokens=200,
+                temperature=0.5
+            )
+            summary = completion.choices[0].message.content
+            return summary.strip()
+        except Exception as e:
+            print(f"❌ 요약 생성 중 오류 발생: {e}")
+            return "요약을 생성하는 데 실패했습니다."
+
+    # [추가] 게임 상태를 DB에 저장하는 주 로직
+    async def handle_save_game_state(self, user, data):
+        """요청받은 게임 상태를 MultimodeSession에 저장합니다."""
+        room_id = self.room_id
+        
+        # --- choice_history 관련 로직 (기존과 동일) ---
+        cache_key = f"room_{room_id}_choice_log"
+        log_history = await database_sync_to_async(cache.get)(cache_key, [])
+        
+        if not isinstance(log_history, list):
+            log_history = []
+        
+        current_choice_text = data.get("selectedChoice", {}).get(next(iter(data.get("selectedChoice", {})), ''))
+        
+        new_log_entry = {
+            "scene": data.get('title', '어떤 상황'),
+            "choice": current_choice_text if current_choice_text else "선택 없음"
+        }
+        log_history.append(new_log_entry)
+        
+        await database_sync_to_async(cache.set)(cache_key, log_history, timeout=3600)
+        
+        formatted_log_text = ""
+        for entry in log_history:
+            scene_text = entry.get('scene', '알 수 없는 상황')
+            choice_text = entry.get('choice', '특별한 행동 없음')
+            formatted_log_text += f"- 상황: {scene_text}\n  - 유저의 선택: {choice_text}\n\n"
+
+        summary_text = await self._summarize_with_llm(formatted_log_text)
+        
+        new_history_entry = {
+            "description": [data.get("description", "상황 설명 없음")],
+            "choices": [data.get("choices", {})],
+            "selectedChoices": [data.get("selectedChoice", {})],
+            "summary": summary_text
+        }
+
+        # ✅ [추가] 캐시에서 캐릭터 설정 정보를 가져옵니다.
+        room_state = await database_sync_to_async(_get_room_state_from_cache)(self.room_id)
+        # 'final_setup' 키에 캐릭터 정보가 저장되어 있습니다.
+        character_data = room_state.get("final_setup")
+
+        # ✅ [수정] _save_to_db 호출 시 character_data를 함께 전달합니다.
+        was_successful = await self._save_to_db(user, self.room_id, new_history_entry, character_data)
+
+        # --- 결과 전송 로직 (기존과 동일) ---
+        if was_successful:
+            await self.send_json({
+                "type": "save_success",
+                "message": "게임 진행 상황이 성공적으로 저장되었습니다."
+            })
+        else:
+            await self.send_error_message("게임 저장에 실패했습니다. 다시 시도해주세요.")
+
+
+    # ✅ [수정] character_data 인자를 받도록 함수 시그니처를 변경합니다.
+    @database_sync_to_async
+    def _save_to_db(self, user, room_id, new_entry, character_data):
+        """DB에 choice_history와 character_history를 저장합니다."""
+        try:
+            try:
+                selected_options = GameRoomSelectScenario.objects.select_related('gameroom', 'scenario').get(gameroom_id=room_id)
+                gameroom = selected_options.gameroom
+                scenario_obj = selected_options.scenario
+            except GameRoomSelectScenario.DoesNotExist:
+                print(f"❌ DB 저장 오류: gameroom_id {room_id}에 대한 시나리오 선택 정보가 없습니다.")
+                return False
+
+            if not gameroom or not scenario_obj:
+                print(f"❌ DB 저장 오류: gameroom 또는 scenario 객체를 찾을 수 없습니다.")
+                return False
+
+            session, created = MultimodeSession.objects.get_or_create(
+                user=user,
+                gameroom=gameroom,
+                defaults={
+                    'scenario': scenario_obj,
+                    'choice_history': {}, # BaseSession 기본값 사용
+                    # ✅ [추가] 세션 생성 시 character_history 기본값을 설정합니다.
+                    'character_history': character_data if character_data else {}
+                }
+            )
+
+            # ✅ [추가] 생성된 세션이든 기존 세션이든, 항상 최신 정보로 업데이트합니다.
+            session.choice_history = new_entry # choice_history는 단일 객체로 덮어쓰기
+            if character_data: # character_data가 있는 경우에만 업데이트
+                session.character_history = character_data
+            
+            # ✅ [수정] 저장할 필드 목록에 character_history를 추가합니다.
+            session.save(update_fields=['choice_history', 'character_history'])
+
+            print("✅ DB 저장 성공! (캐릭터 정보 포함, 덮어쓰기)")
+            return True
+
+        except Exception as e:
+            print(f"❌ DB 저장 중 심각한 오류 발생: {e}")
+            return False
+
+    # ✅ [수정] ask_llm_for_scene_json 함수를 비동기 네이티브 방식으로 수정합니다.
     async def ask_llm_for_scene_json(self, history, user_message):
         """LLM을 호출하여 JSON 형식의 씬 데이터를 받고, 파싱하여 반환"""
         history.append({"role": "user", "content": user_message})
         
         try:
-            # ✅ 아래 print 문을 추가해주세요.
-            print("⏳ Azure OpenAI API 호출을 시작합니다...")
+            print("⏳ Azure OpenAI API 호출을 시작합니다... (비동기 방식)")
             
-            completion = await database_sync_to_async(oai_client.chat.completions.create)(
+            completion = await oai_client.chat.completions.create(
                 model=OAI_DEPLOYMENT,
                 messages=history,
-                max_tokens=2000,
+                max_tokens=4000,
                 temperature=0.7
             )
             
-            # ✅ 아래 print 문을 추가해주세요.
             print("✅ Azure OpenAI API로부터 응답을 받았습니다!")
+
+            # ✅ [디버깅 추가] AI가 보낸 원본 응답 객체 전체를 확인합니다.
+            print("--- 🤖 AI 원본 응답 객체 ---")
+            print(completion)
+            print("--------------------------")
 
             response_text = completion.choices[0].message.content
             
-            # LLM의 응답(주로 마크다운 코드 블록)에서 순수 JSON 텍스트만 추출
+            # ✅ [디버깅 추가] 파싱하기 전의 텍스트를 확인합니다.
+            print(f"--- 📝 AI 응답 텍스트 (파싱 전) ---\n{response_text}\n--------------------------")
+            
             json_str = self.extract_json_block(response_text)
             scene_json = json.loads(json_str)
             
-            history.append({"role": "assistant", "content": response_text}) # 원본 응답 저장
-            await GameState.set_game_state(self.room_id, {"conversation_history": history})
+            history.append({"role": "assistant", "content": response_text})
+            
+            await GameState.set_game_state(
+                self.room_id, 
+                {
+                    "current_scene_index": scene_json.get("index", 0),
+                    "conversation_history": history,
+                    # 필요에 따라 다른 초기 게임 상태 정보 추가
+                }
+            )
             
             return scene_json
         except Exception as e:
-            await self.send_error_message(f"LLM 응답 처리 중 오류: {e}")
+            error_message = f"LLM 응답 처리 중 오류: {e}"
+            print(f"❌ {error_message}")
+            await self.send_error_message(error_message)
             return None
             
     def create_system_prompt_for_json(self, scenario, characters):
