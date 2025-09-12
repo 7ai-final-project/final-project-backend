@@ -1,7 +1,8 @@
 # backend/game/multi_mode/views.py
 import datetime
 from django.utils import timezone
-from rest_framework import generics, permissions, status, viewsets 
+from rest_framework import generics, permissions, status, viewsets
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
@@ -12,11 +13,11 @@ from django.contrib.auth.hashers import check_password
 
 from game.models import (
     GameRoom, GameJoin, Scenario, Genre,
-    Difficulty, Mode, GameRoomSelectScenario, Character
+    Difficulty, Mode, GameRoomSelectScenario, Character, MultimodeSession
 )
 from game.serializers import (
     GameRoomSerializer, ScenarioSerializer, GenreSerializer,
-    DifficultySerializer, ModeSerializer, GameRoomSelectScenarioSerializer, CharacterSerializer
+    DifficultySerializer, ModeSerializer, GameRoomSelectScenarioSerializer, CharacterSerializer, MultimodeSessionSerializer
 )
 
 # Channels 브로드캐스트
@@ -354,3 +355,23 @@ class CharacterListView(generics.ListAPIView):
         if topic_name:
             return Character.objects.filter(scenario__title=topic_name)
         return Character.objects.none()
+    
+class MySessionDetailView(APIView):
+    """
+    현재 로그인한 유저가 특정 방(room_id)에 저장한 세션 정보를 반환하는 API
+    """
+    permission_classes = [IsAuthenticated] # 로그인한 유저만 접근 가능
+
+    def get(self, request, pk, format=None): # URL의 <uuid:pk>를 받기 위해 'pk'로 변경
+        try:
+            session = MultimodeSession.objects.get(
+                user=request.user,
+                gameroom_id=pk # 'room_id' 대신 'pk'를 사용
+            )
+            serializer = MultimodeSessionSerializer(session)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except MultimodeSession.DoesNotExist:
+            return Response(
+                {"detail": "저장된 세션이 없습니다."}, 
+                status=status.HTTP_404_NOT_FOUND
+            )

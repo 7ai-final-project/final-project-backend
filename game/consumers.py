@@ -371,7 +371,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
 
 class GameConsumer(AsyncJsonWebsocketConsumer):
     """
-    LLM을 사용하여 실시간으로 "구조화된 씬 데이터"를 생성하는 Consumer
+    [수정] AI 턴 시뮬레이션을 포함하여 모든 게임 로직을 총괄하는 Consumer
     """
     async def connect(self):
         self.room_id = self.scope["url_route"]["kwargs"]["room_id"]
@@ -390,26 +390,219 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         if msg_type == "request_initial_scene":
             scenario_title = content.get("topic")
             characters_data = content.get("characters", [])
-            # ✅ [수정] 빠져있던 user 인자를 추가하여 함수를 호출합니다.
             await self.handle_start_game_llm(user, scenario_title, characters_data)
 
-        elif msg_type == "submit_choice":
-            choice_data = content.get("choice")
-            await self.handle_player_choice(user, choice_data)
+        elif msg_type == "submit_player_choice":
+            player_result_data = content.get("player_result")
+            all_characters = content.get("all_characters") # AI 시뮬레이션을 위해 모든 캐릭터 정보 수신
+            await self.handle_turn_resolution_with_ai(player_result_data, all_characters)
+
+        # [추가 ✨] 2. 다음 씬을 생성해달라고 LLM에게 요청하는 핸들러
+        elif msg_type == "request_next_scene":
+            history_data = content.get("history")
+            await self.handle_request_next_scene(user, history_data)
+
+        elif msg_type == "continue_game":
+            session_data = content.get("session_data")
+            if user.is_authenticated and session_data:
+                await self.handle_continue_game(user, session_data)
 
         elif msg_type == "save_game_state":
             save_data = content.get("data")
             if user.is_authenticated and save_data:
                 await self.handle_save_game_state(user, save_data)
 
-    async def handle_start_game_llm(self, user, scenario_title, characters_data):
-        """LLM을 사용하여 게임의 첫 번째 씬(JSON)을 생성하고, 이전 기록을 초기화"""
+    def _get_dc(self, difficulty_str="초급"):
+        # 필요 시 DB에서 난이도 객체를 가져와 DC 값을 설정할 수 있습니다.
+        return {"초급": 10, "중급": 13, "상급": 16}.get(difficulty_str, 10)
+
+    def _get_stat_value(self, character, stat_kr):
+        stats_dict = character.get('ability', {}).get('stats', {})
+        return stats_dict.get(stat_kr, 0) # 기본값 0
+
+    def _simulate_ai_turn(self, ai_character, choices_for_role, difficulty):
+        """AI 캐릭터의 턴을 시뮬레이션하고 판정 결과를 반환합니다."""
+        if not choices_for_role:
+            return None # 선택지가 없으면 아무것도 하지 않음
+
+        ai_choice = random.choice(choices_for_role)
+        dice = random.randint(1, 20)
+        stat_value = self._get_stat_value(ai_character, ai_choice['appliedStat'])
+        modifier = ai_choice['modifier']
+        total = dice + stat_value + modifier
+        dc = self._get_dc(difficulty)
+
+        grade = "F"
+        if dice == 20: grade = "SP"
+        elif dice == 1: grade = "SF"
+        elif total >= dc: grade = "S"
+
+        return {
+            "role": ai_character['role_id'],
+            "choiceId": ai_choice['id'],
+            "grade": grade,
+            "dice": dice,
+            "appliedStat": ai_choice['appliedStat'],
+            "statValue": stat_value,
+            "modifier": modifier,
+            "total": total,
+        }
+
+    async def handle_turn_resolution_with_ai(self, player_result, all_characters):
+        """플레이어 결과를 받고, AI 턴을 시뮬레이션한 후, 종합 결과를 LLM에 보내 서술을 생성합니다."""
+        state = await GameState.get_game_state(self.room_id)
+        current_scene = state.get("current_scene")
+        history = state.get("conversation_history", [])
         
-        # ✅ [추가] 새 게임이 시작될 때, DB에 저장된 이전 기록을 초기화합니다.
+        if not current_scene:
+            await self.send_error_message("오류: 현재 씬 정보를 찾을 수 없습니다.")
+            return
+
+        # 1. 모든 캐릭터의 최종 결과를 담을 리스트 (플레이어 결과는 이미 받음)
+        final_results = [player_result]
+
+        # 2. AI 캐릭터들의 턴을 시뮬레이션합니다.
+        player_character_name = player_result['characterName']
+        player_role_id = player_result['role']
+        
+        # 역할 ID와 캐릭터 객체를 매핑
+        role_to_char_map = {
+            char['role_id']: char for char in all_characters
+        }
+
+        # 전체 역할 목록에서 플레이어 역할을 제외하고 AI 역할만 남깁니다.
+        all_roles_in_scene = current_scene['round']['choices'].keys()
+        ai_roles = [role for role in all_roles_in_scene if role != player_role_id]
+
+        for role_id in ai_roles:
+            ai_char_obj = role_to_char_map.get(role_id)
+            choices_for_role = current_scene['round']['choices'].get(role_id, [])
+            
+            if ai_char_obj and choices_for_role:
+                # TODO: 난이도 정보를 세션/DB에서 가져오도록 수정 가능
+                ai_result = self._simulate_ai_turn(ai_char_obj, choices_for_role, "초급")
+                if ai_result:
+                    # AI 결과에 캐릭터 이름을 추가해줍니다. (프론트 표시용)
+                    ai_result['characterName'] = ai_char_obj['name']
+                    final_results.append(ai_result)
+
+        # 3. 모든 결과를 바탕으로 LLM에게 보낼 프롬프트를 생성합니다.
+        results_summary = ""
+        for res in final_results:
+            try:
+                # 'choices' 딕셔너리에서 선택지 텍스트를 찾습니다.
+                choice_text = next(c['text'] for c in current_scene['round']['choices'][res['role']] if c['id'] == res['choiceId'])
+                results_summary += f"- {res.get('characterName', res['role'])} (역할: {res['role']}): '{choice_text}' 행동 -> {res['grade']} 판정\n"
+            except (KeyError, StopIteration):
+                 results_summary += f"- {res.get('characterName', res['role'])}: 행동 정보 없음 -> {res['grade']} 판정\n"
+
+
+        narration_prompt = f"""
+        TRPG 게임의 한 턴이 진행되었습니다. 모든 캐릭터의 행동과 판정 결과는 다음과 같습니다.
+        {results_summary}
+        이 모든 상황을 종합하여, 무슨 일이 일어났는지 2~3 문장으로 흥미진진하게 서술해주세요.
+        """
+        
+        # 4. LLM을 호출하여 최종 서사를 생성합니다.
+        try:
+            completion = await oai_client.chat.completions.create(
+                model=OAI_DEPLOYMENT,
+                messages=[
+                    {"role": "system", "content": "당신은 모든 상황을 종합하여 결과를 서술하는 TRPG 게임 마스터입니다."},
+                    {"role": "user", "content": narration_prompt}
+                ],
+                max_tokens=500, temperature=0.8
+            )
+            narration = completion.choices[0].message.content.strip()
+            history.append({"role": "user", "content": f"(이번 턴 요약:\n{results_summary})"})
+            history.append({"role": "assistant", "content": narration})
+            await GameState.set_game_state(self.room_id, {"current_scene": current_scene, "conversation_history": history})
+
+        except Exception as e:
+            print(f"❌ 서사 생성 중 오류: {e}")
+            narration = "예상치 못한 사건이 발생하여 숲 전체가 술렁였습니다."
+
+        # 5. 프론트엔드로 최종 서사와 '상세보기'에 필요한 전체 판정 데이터를 함께 보냅니다.
+        await self.broadcast_to_group({
+            "event": "turn_resolved", # 새로운 이벤트 이름
+            "narration": narration,
+            "roundResult": {
+                "sceneIndex": current_scene['index'],
+                "results": final_results,
+            }
+        })
+
+    # [신규 ✨] 2. 다음 씬 요청 핸들러 (LLM 호출 있음)
+    async def handle_request_next_scene(self, user, history_data):
+        """
+        이전 씬의 선택 결과를 바탕으로 LLM에게 다음 씬(JSON)을 요청합니다.
+        """
+        state = await GameState.get_game_state(self.room_id)
+        history = state.get("conversation_history", [])
+        username = user.name if user.is_authenticated else "플레이어"
+        
+        last_choice = history_data.get("lastChoice", {})
+        last_narration = history_data.get("lastNarration", "특별한 일은 없었다.")
+        current_scene_index = history_data.get("sceneIndex", 0)
+
+        user_message = f"""
+        플레이어 '{username}' (역할: {last_choice.get('role')})가 이전 씬에서 다음 선택지를 골랐고, 아래와 같은 결과를 얻었어.
+        - 선택 내용: "{last_choice.get('text')}"
+        - 결과: "{last_narration}"
+
+        이 결과를 반영해서, 다음 씬(sceneIndex: {current_scene_index + 1})의 JSON 데이터를 생성해줘.
+        """
+        scene_json = await self.ask_llm_for_scene_json(history, user_message)
+        if scene_json:
+            await self.broadcast_to_group({ "event": "scene_update", "scene": scene_json })
+
+    async def handle_continue_game(self, user, session_data):
+        """저장된 세션 데이터를 기반으로 게임을 이어갑니다."""
+        choice_history = session_data.get("choice_history")
+        character_history = session_data.get("character_history")
+
+        scenario_title = await self.get_scenario_title_from_session(user, self.room_id)
+        scenario = await self.get_scenario_from_db(scenario_title)
+        
+        if not all([scenario, character_history, choice_history]):
+            await self.send_error_message("게임을 이어갈 정보가 부족합니다.")
+            return
+
+        characters_data = character_history.get("allCharacters", [])
+        system_prompt = self.create_system_prompt_for_json(scenario, characters_data)
+
+        # ✅ [수정] choice_history가 단일 객체(dict)이므로 바로 summary를 추출합니다.
+        last_summary = choice_history.get("summary", "이전 기록을 찾을 수 없습니다.")
+        # ✅ [수정] 저장된 sceneIndex를 가져옵니다.
+        previous_index = choice_history.get('sceneIndex', 0)
+        
+        user_message = f"""
+        이전에 저장된 게임을 이어서 진행하려고 해.
+        지금까지의 줄거리 요약은 다음과 같아: "{last_summary}"
+
+        이 요약에 이어서, 모든 캐릭터가 참여하는 다음 씬을 생성해줘.
+        이전 씬의 sceneIndex가 {previous_index} 이었으니, 다음 씬의 index는 {previous_index + 1}(으)로 생성해야 해.
+        이전 상황의 긴장감을 유지하면서 이야기를 계속 진행해줘.
+        """
+        
+        history = [system_prompt]
+        scene_json = await self.ask_llm_for_scene_json(history, user_message)
+
+        if scene_json:
+            await self.broadcast_to_group({ "event": "scene_update", "scene": scene_json })
+
+    # ✅ [추가] DB에서 세션에 연결된 시나리오 이름을 가져오는 헬퍼
+    @database_sync_to_async
+    def get_scenario_title_from_session(self, user, room_id):
+        try:
+            session = MultimodeSession.objects.select_related('scenario').get(user=user, gameroom_id=room_id)
+            return session.scenario.title
+        except MultimodeSession.DoesNotExist:
+            return None
+
+    async def handle_start_game_llm(self, user, scenario_title, characters_data):
         if user.is_authenticated:
             await self.clear_previous_session_history(user)
-
-        # ✅ [추가] 요약용 캐시도 함께 비웁니다.
         cache.delete(f"room_{self.room_id}_choice_log")
         
         scenario = await self.get_scenario_from_db(scenario_title)
@@ -425,6 +618,39 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
         if scene_json:
             await self.broadcast_to_group({ "event": "scene_update", "scene": scene_json })
+
+    async def ask_llm_for_scene_json(self, history, user_message):
+        """LLM을 호출하여 JSON 형식의 씬 데이터를 받고, 파싱하여 반환"""
+        history.append({"role": "user", "content": user_message})
+        
+        try:
+            completion = await oai_client.chat.completions.create(
+                model=OAI_DEPLOYMENT,
+                messages=history,
+                max_tokens=4000,
+                temperature=0.7
+            )
+            response_text = completion.choices[0].message.content
+            json_str = self.extract_json_block(response_text)
+            scene_json = json.loads(json_str)
+            
+            history.append({"role": "assistant", "content": response_text})
+            
+            # [핵심 버그 수정 🐞] GameState에 씬의 인덱스가 아닌, 씬 JSON 객체 전체를 'current_scene' 키로 저장합니다.
+            await GameState.set_game_state(
+                self.room_id, 
+                {
+                    "current_scene": scene_json,
+                    "conversation_history": history,
+                }
+            )
+            
+            return scene_json
+        except Exception as e:
+            error_message = f"LLM 응답 처리 중 오류: {e}"
+            print(f"❌ {error_message}")
+            await self.send_error_message(error_message)
+            return None
 
     # ✅ [추가] 이전 세션 기록을 DB에서 초기화하는 메서드
     async def clear_previous_session_history(self, user):
@@ -522,7 +748,8 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             "description": [data.get("description", "상황 설명 없음")],
             "choices": [data.get("choices", {})],
             "selectedChoices": [data.get("selectedChoice", {})],
-            "summary": summary_text
+            "summary": summary_text,
+            "sceneIndex": data.get("sceneIndex", 0)
         }
 
         # ✅ [추가] 캐시에서 캐릭터 설정 정보를 가져옵니다.
@@ -586,44 +813,29 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             print(f"❌ DB 저장 중 심각한 오류 발생: {e}")
             return False
 
-    # ✅ [수정] ask_llm_for_scene_json 함수를 비동기 네이티브 방식으로 수정합니다.
     async def ask_llm_for_scene_json(self, history, user_message):
         """LLM을 호출하여 JSON 형식의 씬 데이터를 받고, 파싱하여 반환"""
         history.append({"role": "user", "content": user_message})
         
         try:
-            print("⏳ Azure OpenAI API 호출을 시작합니다... (비동기 방식)")
-            
             completion = await oai_client.chat.completions.create(
                 model=OAI_DEPLOYMENT,
                 messages=history,
                 max_tokens=4000,
                 temperature=0.7
             )
-            
-            print("✅ Azure OpenAI API로부터 응답을 받았습니다!")
-
-            # ✅ [디버깅 추가] AI가 보낸 원본 응답 객체 전체를 확인합니다.
-            print("--- 🤖 AI 원본 응답 객체 ---")
-            print(completion)
-            print("--------------------------")
-
             response_text = completion.choices[0].message.content
-            
-            # ✅ [디버깅 추가] 파싱하기 전의 텍스트를 확인합니다.
-            print(f"--- 📝 AI 응답 텍스트 (파싱 전) ---\n{response_text}\n--------------------------")
-            
             json_str = self.extract_json_block(response_text)
             scene_json = json.loads(json_str)
             
             history.append({"role": "assistant", "content": response_text})
             
+            # [핵심 버그 수정 🐞] GameState에 씬의 내용 전체를 'current_scene' 키로 저장합니다.
             await GameState.set_game_state(
                 self.room_id, 
                 {
-                    "current_scene_index": scene_json.get("index", 0),
+                    "current_scene": scene_json, # ✅ 'current_scene_index'가 아닌 'current_scene'으로 저장
                     "conversation_history": history,
-                    # 필요에 따라 다른 초기 게임 상태 정보 추가
                 }
             )
             
@@ -636,42 +848,47 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             
     def create_system_prompt_for_json(self, scenario, characters):
         """LLM이 구조화된 JSON을 생성하도록 지시하는 시스템 프롬프트"""
-        char_descriptions = "\n".join([f"- **{c['name']}** ({c['description']})" for c in characters])
         
-        # 프론트엔드가 사용하는 SceneTemplate의 JSON 구조를 명시
+        char_descriptions = "\n".join(
+            [f"- **{c['name']}** ({c['description']})\n  - 능력치: {c.get('ability', {}).get('stats', {})}" for c in characters]
+        )
+        
+        # [수정] fragments 키를 JSON 스키마에서 완전히 제거합니다.
         json_schema = """
         {
-          "id": "string (예: scene0)",
-          "index": "number (예: 0)",
-          "roleMap": { "캐릭터이름": "역할ID" },
-          "round": {
+        "id": "string (예: scene0)",
+        "index": "number (예: 0)",
+        "roleMap": { "캐릭터이름": "역할ID" },
+        "round": {
             "title": "string (현재 씬의 제목)",
+            "description": "string (현재 상황에 대한 구체적인 묘사, 2~3 문장)",
             "choices": {
-              "역할ID": [
-                { "id": "string", "text": "string (선택지 내용)", "appliedStat": "string (관련 능력치)", "modifier": "number (보정치)" }
-              ]
-            },
-            "fragments": {
-              "역할ID_선택지ID_SP": "string (대성공 시 결과)",
-              "역할ID_선택지ID_S": "string (성공 시 결과)",
-              "역할ID_선택지ID_F": "string (실패 시 결과)",
-              "역할ID_선택지ID_SF": "string (대실패 시 결과)"
+            "역할ID": [
+                { 
+                "id": "string", 
+                "text": "string (선택지 내용)", 
+                "appliedStat": "string (반드시 '힘', '민첩', '지식', '의지', '매력', '운' 중 하나)", 
+                "modifier": "number (보정치)" 
+                }
+            ]
             }
-          }
+        }
         }
         """
 
         prompt = f"""
         당신은 TRPG 게임의 시나리오를 실시간으로 생성하는 AI입니다.
         당신의 임무는 사용자 행동에 따라 다음 게임 씬 데이터를 "반드시" 아래의 JSON 스키마에 맞춰 생성하는 것입니다.
-        절대로 일반 텍스트나 다른 형식으로 응답해서는 안 됩니다.
+        'fragments' 필드는 절대로 생성하지 마세요.
 
         ## 게임 배경
         - 시나리오: {scenario.title} ({scenario.description})
-        - 참가 캐릭터:
+        - 참가 캐릭터 정보 (이 능력치를 반드시 참고할 것):
         {char_descriptions}
 
         ## 출력 JSON 스키마 (필수 준수)
+        - `appliedStat` 필드의 값은 반드시 캐릭터 정보에 명시된 6가지 능력치('힘', '민첩', '지식', '의지', '매력', '운') 중 하나여야 합니다.
+
         ```json
         {json_schema}
         ```
