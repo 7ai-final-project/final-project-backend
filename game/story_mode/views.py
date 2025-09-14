@@ -57,7 +57,6 @@ class StoryListView(APIView) :
         try :
             stories = Story.objects.filter(is_display=True, is_deleted=False)
             serializer = StorySerializer(stories, many=True)
-            print('stories', serializer.data)
             return Response({
                 'message' : '스토리 목록 조회 성공',
                 'stories' : serializer.data
@@ -99,7 +98,7 @@ class BaseStoryModeView(APIView) :
                     'title' : moment.title,
                     'description' : moment.description,
                     'choices' : choices_data,
-                    # 'image_path' : moment.image_path
+                    'image_path' : moment.image_path
                 }
 
             # 스토리 정보
@@ -207,7 +206,6 @@ class BaseStoryModeView(APIView) :
                 temperature=0.7
             )
             ai_response_content = parse_ai_response(response.choices[0].message.content)
-            print('ai_response_content :', ai_response_content)
             return ai_response_content, None
         except Exception as e :
             print(f'🛑 오류: OpenAI API 호출 또는 응답 처리 실패. 오류: {e}')
@@ -238,6 +236,7 @@ class StartGameView(BaseStoryModeView) :
         current_moments = all_moments.get(current_moment_id)
         current_moment_title = current_moments.get('title', '')
         current_moment_description = current_moments.get('description', '')
+        current_moment_image = current_moments.get('image_path', '')
 
         choices = current_moments.get('choices', [])
         is_ending = not bool(choices)
@@ -275,6 +274,7 @@ class StartGameView(BaseStoryModeView) :
             "story_title": title,
             "current_moment_id": current_moment_id,
             "current_moment_title": current_moment_title,
+            "image_path" : current_moment_image
         }, status=status.HTTP_200_OK)        
 
 # 선택된 스토리 DB 조회 (선택지 선택 후, 진행)
@@ -327,6 +327,7 @@ class MakeChoiceView(BaseStoryModeView):
         
         next_moment_title = next_moments.get('title', '')
         next_moment_description = next_moments.get('description', '')
+        next_moment_image = next_moments.get('image_path', '')
 
         choices = next_moments.get('choices', [])
         is_ending = not bool(choices)
@@ -366,4 +367,5 @@ class MakeChoiceView(BaseStoryModeView):
             "story_title": title,
             "current_moment_id": next_moment_id,
             "current_moment_title": next_moment_title,
+            "image_path" : next_moment_image
         }, status=status.HTTP_200_OK)
