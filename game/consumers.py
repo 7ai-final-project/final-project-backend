@@ -292,83 +292,6 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         )
         return participant
 
-# class GameConsumer(AsyncJsonWebsocketConsumer):
-#     async def connect(self):
-#         self.room_id = self.scope["url_route"]["kwargs"]["room_id"]
-#         self.group_name = f"game_{self.room_id}"
-#         await self.channel_layer.group_add(self.group_name, self.channel_name)
-#         await self.accept()
-
-#         # 게임 상태 초기화
-#         await GameState.ensure_scene(self.room_id, 0)
-#         # [수정 🔥] UUID 객체를 JSON으로 보내기 위해 str()로 변환합니다.
-#         await self.send_json({"type": "game_connect", "roomId": str(self.room_id)})
-
-#     async def disconnect(self, code):
-#         await self.channel_layer.group_discard(self.group_name, self.channel_name)
-
-#     async def receive_json(self, content, **kwargs):
-#         msg_type = content.get("type")
-
-#         if msg_type == "scene_enter":
-#             scene_index = content.get("sceneIndex", 0)
-#             await GameState.ensure_scene(self.room_id, scene_index)
-#             # 모든 유저에게 알림
-#             await self.channel_layer.group_send(
-#                 self.group_name,
-#                 {"type": "scene_state", "sceneIndex": scene_index}
-#             )
-
-#         elif msg_type == "choice_submit":
-#             role = content.get("role")
-#             choice_id = content.get("choiceId")
-#             scene_index = content.get("sceneIndex")
-
-#             await GameState.store_choice(self.room_id, scene_index, role, choice_id)
-
-#             all_submitted = await GameState.check_all_submitted(self.room_id, scene_index)
-#             if all_submitted:
-#                 # 라운드 락
-#                 await self.channel_layer.group_send(
-#                     self.group_name,
-#                     {"type": "round_locked", "sceneIndex": scene_index}
-#                 )
-#                 # 판정 수행
-#                 results = await perform_round_judgement(self.room_id, scene_index)
-#                 await self.channel_layer.group_send(
-#                     self.group_name,
-#                     {"type": "round_result", "sceneIndex": scene_index, "payload": results}
-#                 )
-
-#         elif msg_type == "request_next_scene":
-#             scene_index = content.get("sceneIndex")
-#             next_index = await GameState.advance_scene(self.room_id, scene_index)
-#             await self.channel_layer.group_send(
-#                 self.group_name,
-#                 {"type": "scene_advance", "sceneIndex": scene_index, "nextIndex": next_index}
-#             )
-
-#     # 그룹 이벤트 → 클라 전달
-#     async def scene_state(self, event):
-#         await self.send_json({"type": "scene_state", "sceneIndex": event["sceneIndex"]})
-
-#     async def round_locked(self, event):
-#         await self.send_json({"type": "round_locked", "sceneIndex": event["sceneIndex"]})
-
-#     async def round_result(self, event):
-#         await self.send_json({
-#             "type": "round_result",
-#             "sceneIndex": event["sceneIndex"],
-#             "payload": event["payload"]
-#         })
-
-#     async def scene_advance(self, event):
-#         await self.send_json({
-#             "type": "scene_advance",
-#             "sceneIndex": event["sceneIndex"],
-#             "nextIndex": event["nextIndex"]
-#         })
-
 class GameConsumer(AsyncJsonWebsocketConsumer):
     """
     [수정] AI 턴 시뮬레이션을 포함하여 모든 게임 로직을 총괄하는 Consumer
@@ -390,22 +313,22 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         if msg_type == "request_initial_scene":
             scenario_title = content.get("topic")
             characters_data = content.get("characters", [])
-            await self.handle_start_game_llm(user, scenario_title, characters_data)
+            is_loaded_game = content.get("isLoadedGame", False) 
+            await self.handle_start_game_llm(user, scenario_title, characters_data, is_loaded_game)
 
         elif msg_type == "submit_player_choice":
             player_result_data = content.get("player_result")
-            all_characters = content.get("all_characters") # AI 시뮬레이션을 위해 모든 캐릭터 정보 수신
+            all_characters = content.get("all_characters")
             await self.handle_turn_resolution_with_ai(player_result_data, all_characters)
 
-        # [추가 ✨] 2. 다음 씬을 생성해달라고 LLM에게 요청하는 핸들러
         elif msg_type == "request_next_scene":
             history_data = content.get("history")
             await self.handle_request_next_scene(user, history_data)
 
         elif msg_type == "continue_game":
-            session_data = content.get("session_data")
-            if user.is_authenticated and session_data:
-                await self.handle_continue_game(user, session_data)
+            # 'continue_game'은 이제 사용되지 않지만, 만약을 위해 로직을 남겨둡니다.
+            # 모든 시작점은 'request_initial_scene'으로 통일되었습니다.
+            pass
 
         elif msg_type == "save_game_state":
             save_data = content.get("data")
@@ -417,6 +340,9 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         return {"초급": 10, "중급": 13, "상급": 16}.get(difficulty_str, 10)
 
     def _get_stat_value(self, character, stat_kr):
+        if 'stats' in character and isinstance(character['stats'], dict):
+            return character['stats'].get(stat_kr, 0)
+
         stats_dict = character.get('ability', {}).get('stats', {})
         return stats_dict.get(stat_kr, 0) # 기본값 0
 
@@ -532,7 +458,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             }
         })
 
-    # [신규 ✨] 2. 다음 씬 요청 핸들러 (LLM 호출 있음)
     async def handle_request_next_scene(self, user, history_data):
         """
         이전 씬의 선택 결과를 바탕으로 LLM에게 다음 씬(JSON)을 요청합니다.
@@ -556,37 +481,48 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         if scene_json:
             await self.broadcast_to_group({ "event": "scene_update", "scene": scene_json })
 
-    async def handle_continue_game(self, user, session_data):
-        """저장된 세션 데이터를 기반으로 게임을 이어갑니다."""
-        choice_history = session_data.get("choice_history")
-        character_history = session_data.get("character_history")
+    @database_sync_to_async
+    def _get_session_data_from_db(self, user, room_id):
+        try:
+            # 시나리오 정보까지 한번에 가져오기 위해 select_related 사용
+            session = MultimodeSession.objects.select_related('scenario').get(user=user, gameroom_id=room_id)
+            return session
+        except MultimodeSession.DoesNotExist:
+            return None
 
-        scenario_title = await self.get_scenario_title_from_session(user, self.room_id)
-        scenario = await self.get_scenario_from_db(scenario_title)
-        
-        if not all([scenario, character_history, choice_history]):
-            await self.send_error_message("게임을 이어갈 정보가 부족합니다.")
-            return
+    async def handle_continue_game(self, user, saved_session):
+        """
+        [수정] DB에서 직접 불러온 세션 정보로 게임을 이어갑니다.
+        """
+        choice_history = saved_session.choice_history
+        character_history = saved_session.character_history
+        scenario = saved_session.scenario
 
         characters_data = character_history.get("allCharacters", [])
         system_prompt = self.create_system_prompt_for_json(scenario, characters_data)
 
-        # ✅ [수정] choice_history가 단일 객체(dict)이므로 바로 summary를 추출합니다.
-        last_summary = choice_history.get("summary", "이전 기록을 찾을 수 없습니다.")
-        # ✅ [수정] 저장된 sceneIndex를 가져옵니다.
+        # 1. DB에 저장된 LLM 대화 기록(기억)을 불러옵니다. 없으면 시스템 프롬프트만 사용.
+        conversation_history = choice_history.get("conversation_history", [system_prompt])
+
+        last_full_summary = choice_history.get("summary", "이전 기록을 찾을 수 없습니다.")
+        recent_logs = choice_history.get("recent_logs", [])
         previous_index = choice_history.get('sceneIndex', 0)
-        
+
+        recent_logs_text = "\n".join(
+            [f"- 상황: {log.get('scene', '')}, 유저 선택: {log.get('choice', '')}" for log in recent_logs]
+        )
+
         user_message = f"""
         이전에 저장된 게임을 이어서 진행하려고 해.
-        지금까지의 줄거리 요약은 다음과 같아: "{last_summary}"
-
-        이 요약에 이어서, 모든 캐릭터가 참여하는 다음 씬을 생성해줘.
+        지금까지의 줄거리 요약은 다음과 같아: "{last_full_summary}"
+        최근에 진행된 상황은 다음과 같아:
+        {recent_logs_text if recent_logs_text else "최근 기록 없음."}
+        이 요약과 최근 기록에 이어서, 모든 캐릭터가 참여하는 다음 씬을 생성해줘.
         이전 씬의 sceneIndex가 {previous_index} 이었으니, 다음 씬의 index는 {previous_index + 1}(으)로 생성해야 해.
-        이전 상황의 긴장감을 유지하면서 이야기를 계속 진행해줘.
         """
-        
-        history = [system_prompt]
-        scene_json = await self.ask_llm_for_scene_json(history, user_message)
+
+        # 2. ask_llm_for_scene_json에 저장된 대화 기록을 전달합니다.
+        scene_json = await self.ask_llm_for_scene_json(conversation_history, user_message)
 
         if scene_json:
             await self.broadcast_to_group({ "event": "scene_update", "scene": scene_json })
@@ -600,11 +536,25 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         except MultimodeSession.DoesNotExist:
             return None
 
-    async def handle_start_game_llm(self, user, scenario_title, characters_data):
+    async def handle_start_game_llm(self, user, scenario_title, characters_data, is_loaded_game: bool):
+        if is_loaded_game:
+            # '불러오기'인 경우, DB에서 세션을 찾아 handle_continue_game으로 처리를 위임
+            print(f"ℹ️  불러온 게임을 시작합니다. User: {user.name}")
+            saved_session = await self._get_session_data_from_db(user, self.room_id)
+            if saved_session:
+                await self.handle_continue_game(user, saved_session)
+            else:
+                await self.send_error_message("이어할 게임 기록을 찾을 수 없습니다.")
+            return
+
+        # '새 게임'인 경우, 기록을 초기화하고 첫 씬을 생성
+        print(f"ℹ️  새 게임 시작으로 판단하여 이전 기록을 초기화합니다. User: {user.name}")
         if user.is_authenticated:
             await self.clear_previous_session_history(user)
-        cache.delete(f"room_{self.room_id}_choice_log")
         
+        # GameState 캐시도 함께 초기화
+        await GameState.set_game_state(self.room_id, {})
+
         scenario = await self.get_scenario_from_db(scenario_title)
         if not scenario:
             await self.send_error_message(f"시나리오 '{scenario_title}'를 찾을 수 없습니다.")
@@ -612,7 +562,7 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
         system_prompt = self.create_system_prompt_for_json(scenario, characters_data)
         initial_history = [system_prompt]
-        
+
         user_message = "모든 캐릭터가 참여하는 게임의 첫 번째 씬(sceneIndex: 0)을 생성해줘. 비극적인 사건 직후의 긴장감 있는 상황으로 시작해줘."
         scene_json = await self.ask_llm_for_scene_json(initial_history, user_message)
 
@@ -668,7 +618,7 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             session = MultimodeSession.objects.filter(user=user, gameroom=gameroom).first()
             
             if session:
-                session.choice_history = []
+                session.choice_history = {} # ❌ [] (리스트) 가 아닌 {} (객체)로 초기화
                 session.save(update_fields=['choice_history'])
                 print(f"✅ DB 기록 초기화 성공: User {user.name}, Room {room_id}")
         except GameRoom.DoesNotExist:
@@ -714,61 +664,63 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             print(f"❌ 요약 생성 중 오류 발생: {e}")
             return "요약을 생성하는 데 실패했습니다."
 
-    # [추가] 게임 상태를 DB에 저장하는 주 로직
+    @database_sync_to_async
+    def _get_choice_history_from_db(self, user, room_id):
+        try:
+            session = MultimodeSession.objects.get(user=user, gameroom_id=room_id)
+            return session.choice_history
+        except MultimodeSession.DoesNotExist:
+            return None
+
     async def handle_save_game_state(self, user, data):
-        """요청받은 게임 상태를 MultimodeSession에 저장합니다."""
+        """
+        [수정] DB와 GameState 캐시에서 모든 기록을 가져와 DB에 저장합니다.
+        """
         room_id = self.room_id
+
+        # 1. DB에서 이전 choice_history를 가져와 전체 로그(full_log_history)를 확보
+        previous_history = await self._get_choice_history_from_db(user, room_id)
+        log_history = previous_history.get("full_log_history", []) if isinstance(previous_history, dict) else []
         
-        # --- choice_history 관련 로직 (기존과 동일) ---
-        cache_key = f"room_{room_id}_choice_log"
-        log_history = await database_sync_to_async(cache.get)(cache_key, [])
-        
-        if not isinstance(log_history, list):
-            log_history = []
-        
+        # 2. 현재 턴의 로그를 생성하고 전체 로그 기록에 추가
         current_choice_text = data.get("selectedChoice", {}).get(next(iter(data.get("selectedChoice", {})), ''))
-        
         new_log_entry = {
             "scene": data.get('title', '어떤 상황'),
             "choice": current_choice_text if current_choice_text else "선택 없음"
         }
         log_history.append(new_log_entry)
-        
-        await database_sync_to_async(cache.set)(cache_key, log_history, timeout=3600)
-        
-        formatted_log_text = ""
-        for entry in log_history:
-            scene_text = entry.get('scene', '알 수 없는 상황')
-            choice_text = entry.get('choice', '특별한 행동 없음')
-            formatted_log_text += f"- 상황: {scene_text}\n  - 유저의 선택: {choice_text}\n\n"
 
-        summary_text = await self._summarize_with_llm(formatted_log_text)
+        # 3. GameState 캐시에서 LLM 대화 기록(conversation_history)을 가져옴
+        game_state = await GameState.get_game_state(room_id)
+        conversation_history = game_state.get("conversation_history", [])
         
+        # 4. 전체 로그 기반으로 요약본과 최근 3개 로그 생성
+        formatted_log_text = "\n".join([f"- {e.get('scene', '')}: {e.get('choice', '')}" for e in log_history])
+        full_summary = await self._summarize_with_llm(formatted_log_text)
+        recent_logs_to_save = log_history[-3:]
+
+        # 5. DB에 저장할 최종 객체 생성 (LLM 대화 기록 포함)
         new_history_entry = {
-            "description": [data.get("description", "상황 설명 없음")],
-            "choices": [data.get("choices", {})],
-            "selectedChoices": [data.get("selectedChoice", {})],
-            "summary": summary_text,
-            "sceneIndex": data.get("sceneIndex", 0)
+            "summary": full_summary,
+            "recent_logs": recent_logs_to_save,
+            "full_log_history": log_history,
+            "conversation_history": conversation_history, # ✅ LLM 대화 기록 저장
+            "sceneIndex": data.get("sceneIndex", 0),
+            # 프론트엔드 표시에 필요할 수 있는 기타 정보들
+            "description": data.get("description", ""),
+            "choices": data.get("choices", {}),
+            "selectedChoices": data.get("selectedChoice", {}),
         }
 
-        # ✅ [추가] 캐시에서 캐릭터 설정 정보를 가져옵니다.
+        # 6. 캐릭터 정보와 함께 DB에 저장
         room_state = await database_sync_to_async(_get_room_state_from_cache)(self.room_id)
-        # 'final_setup' 키에 캐릭터 정보가 저장되어 있습니다.
         character_data = room_state.get("final_setup")
-
-        # ✅ [수정] _save_to_db 호출 시 character_data를 함께 전달합니다.
         was_successful = await self._save_to_db(user, self.room_id, new_history_entry, character_data)
 
-        # --- 결과 전송 로직 (기존과 동일) ---
         if was_successful:
-            await self.send_json({
-                "type": "save_success",
-                "message": "게임 진행 상황이 성공적으로 저장되었습니다."
-            })
+            await self.send_json({"type": "save_success", "message": "게임 진행 상황이 저장되었습니다."})
         else:
-            await self.send_error_message("게임 저장에 실패했습니다. 다시 시도해주세요.")
-
+            await self.send_error_message("게임 저장에 실패했습니다.")
 
     # ✅ [수정] character_data 인자를 받도록 함수 시그니처를 변경합니다.
     @database_sync_to_async
