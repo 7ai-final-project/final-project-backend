@@ -1,5 +1,6 @@
 import os
 import requests
+from django.utils import timezone
 from dotenv import load_dotenv
 from django.http import JsonResponse
 from rest_framework import status, permissions
@@ -76,6 +77,10 @@ class GoogleCallbackView(APIView) :
 
             print('user', user)
             print('created', created)
+
+            # 로그인 시마다 last_login 업데이트
+            user.last_login = timezone.now()
+            user.save()
 
             # 로그인
             token = RefreshToken.for_user(user)
@@ -156,6 +161,10 @@ class KakaoCallbackView(APIView) :
 
             print('user', user)
             print('created', created)
+
+            # 로그인 시마다 last_login 업데이트
+            user.last_login = timezone.now()
+            user.save()
 
             # 로그인
             token = RefreshToken.for_user(user)

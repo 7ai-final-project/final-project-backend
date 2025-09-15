@@ -5,8 +5,8 @@ from django.conf import settings
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from game.models import Story
-from game.serializers import StorySerializer
+from storymode.models import Story
+from storymode.serializers import StorySerializer
 
 AZURE_OPENAI_API_KEY = settings.AZURE_OPENAI_API_KEY
 AZURE_OPENAI_ENDPOINT = settings.AZURE_OPENAI_ENDPOINT

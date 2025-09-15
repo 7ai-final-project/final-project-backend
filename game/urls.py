@@ -1,14 +1,5 @@
-# backend\game\urls.py
-
 from django.urls import path
-
-# [수정 1] 새로운 View들을 import 합니다.
-from game.story_mode.views import (
-    StartGameView, 
-    MakeChoiceView, 
-    StoryListView,
-)
-from game.multi_mode.views import (
+from game.views import (
     RoomListCreateView, RoomDetailView, JoinRoomView, LeaveRoomView, 
     ToggleReadyView, StartMultiGameView, EndMultiGameView,
     ScenarioListView, GenreListView, DifficultyListView, ModeListView, get_scene_templates,
@@ -16,11 +7,6 @@ from game.multi_mode.views import (
 )
 
 urlpatterns = [
-    # --- 스토리 모드 URL ---
-    path('story/start/', StartGameView.as_view(), name='story-start'),
-    path('story/choice/', MakeChoiceView.as_view(), name='story-make-choice'),
-    path('story/stories/', StoryListView.as_view(), name='story-list'),
-
     # --- 멀티플레이 모드 URL ---
     path("", RoomListCreateView.as_view(), name="room-list-create"),
     path("<uuid:pk>/", RoomDetailView.as_view(), name="room-detail"),

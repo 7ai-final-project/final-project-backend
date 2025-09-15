@@ -25,5 +25,5 @@ urlpatterns = [
     path('game/', include('game.urls')),
     path('common/', include('common.urls')),
     path('image-gen/', include('image_gen.urls')),
-    # path('llm/', include('llm.urls')),
+    path('storymode/', include('storymode.urls')),
 ]

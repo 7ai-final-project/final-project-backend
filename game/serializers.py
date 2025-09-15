@@ -1,26 +1,10 @@
 from rest_framework import serializers
 from game.models import (
-    StorymodeMoment, StorymodeChoice, Story, GameRoom, GameJoin,
+    GameRoom, GameJoin,
     Scenario, Genre, Difficulty, Mode, GameRoomSelectScenario,Character, MultimodeSession
 )
 from django.contrib.auth.hashers import make_password
 
-
-class ChoiceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = StorymodeChoice
-        fields = '__all__'
-
-class SceneSerializer(serializers.ModelSerializer):
-    choices = ChoiceSerializer(many=True, read_only=True)
-    class Meta:
-        model = StorymodeMoment
-        fields = '__all__'
-
-class StorySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Story
-        fields = ['id', 'title', 'title_eng', 'description', 'description_eng', 'start_moment', 'is_display', 'is_deleted']
 
 class GameJoinSerializer(serializers.ModelSerializer):
     username = serializers.ReadOnlyField(source="user.name")
