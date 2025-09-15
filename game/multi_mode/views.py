@@ -2,6 +2,7 @@
 import datetime
 from django.utils import timezone
 from rest_framework import generics, permissions, status, viewsets
+from django.db.models import Q
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -52,12 +53,14 @@ def broadcast_room(room_id, payload):
     )
 
 class RoomListCreateView(generics.ListCreateAPIView):
-    queryset = GameRoom.objects.all().order_by("-created_at")
+    queryset = GameRoom.objects.filter(is_deleted=False).order_by("-created_at")  
     #queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at") # 삭제되지 않은 방만 조회하도록 변경
     serializer_class = GameRoomSerializer
 
     def get_queryset(self):
-        queryset = GameRoom.objects.all().order_by("-created_at")
+        queryset = GameRoom.objects.exclude(
+            Q(is_deleted=True) | Q(status='finish')
+        ).order_by("-created_at")
         #queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at")
         
         # 이름으로 검색 (search 쿼리 파라미터)
