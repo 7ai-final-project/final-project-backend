@@ -14,7 +14,7 @@ class GameJoinSerializer(serializers.ModelSerializer):
         fields = ["id", "username", "is_ready"]
 
 class GameRoomSerializer(serializers.ModelSerializer):
-    owner = serializers.CharField(source='owner.name', read_only=True)
+    owner = serializers.UUIDField(source='owner.id', read_only=True)
     # [수정 👇] SerializerMethodField를 사용하여 현재 참가자만 필터링합니다.
     selected_by_room = serializers.SerializerMethodField()
     # [추가 👇] 현재 인원 수를 정확하게 계산하는 필드를 추가합니다.
