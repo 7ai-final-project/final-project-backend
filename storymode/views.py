@@ -5,8 +5,10 @@ from django.conf import settings
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from storymode.models import Story
+from storymode.models import Story, StorymodeMoment, StorymodeChoice, StorymodeSession
 from storymode.serializers import StorySerializer
+from rest_framework.permissions import IsAuthenticated
+from django.shortcuts import get_object_or_404
 
 AZURE_OPENAI_API_KEY = settings.AZURE_OPENAI_API_KEY
 AZURE_OPENAI_ENDPOINT = settings.AZURE_OPENAI_ENDPOINT
@@ -52,19 +54,25 @@ def parse_ai_response(llm_output):
         }
 
 # 전체 스토리 DB 조회
-class StoryListView(APIView) :
-    def get(self, request) :
-        try :
+class StoryListView(APIView):
+    permission_classes = [IsAuthenticated] # 👈 1. 로그인한 유저만 목록을 볼 수 있도록!
+
+    def get(self, request):
+        try:
             stories = Story.objects.filter(is_display=True, is_deleted=False)
-            serializer = StorySerializer(stories, many=True)
+            
+            # 👇 2. serializer에게 현재 요청 정보(request)를 통째로 넘겨줍니다.
+            #    (그래야 serializer가 request.user에 접근할 수 있습니다.)
+            serializer = StorySerializer(stories, many=True, context={'request': request})
+
             return Response({
-                'message' : '스토리 목록 조회 성공',
-                'stories' : serializer.data
+                'message': '스토리 목록 조회 성공',
+                'stories': serializer.data
             }, status=status.HTTP_200_OK)
-        except Exception as e :
+        except Exception as e:
             print(f"🛑 오류: 스토리 목록을 조회하는 데 실패했습니다. 오류: {e}")
             return Response({
-                'message' : '스토리 목록 조회 실패'
+                'message': '스토리 목록 조회 실패'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # 공통 로직 APIView
@@ -215,14 +223,28 @@ class BaseStoryModeView(APIView) :
 
 # 선택된 스토리 DB 조회 (첫 페이지)
 class StartGameView(BaseStoryModeView) :
+    permission_classes = [IsAuthenticated]
+
     def post(self, request) :
         story_title = request.data.get('story_title')
+        should_continue = request.data.get('should_continue') == 'true'
 
         if not story_title :
             return Response({
                 'message' : '스토리 선택이 필요합니다.'
             }, status=status.HTTP_400_BAD_REQUEST)
+        
+        user = request.user
+        story = get_object_or_404(Story, title=story_title)
 
+        if should_continue :
+            saved_session = StorymodeSession.objects.filter(user=user, story=story).first()
+            if saved_session and isinstance(saved_session.history, list) and len(saved_session.history) > 0 :
+                return Response({'saved_history': saved_session.history}, status=status.HTTP_200_OK)
+            
+        # 만약 '처음부터 시작하기'를 누르면 기존 기록을 삭제하고 싶다면, 아래 주석을 해제하세요.
+        # StorymodeSession.objects.filter(user=user, story=story).delete()
+        
         story_data, error_response = self._get_story_data(story_title)
         if error_response :
             return error_response
@@ -267,16 +289,17 @@ class StartGameView(BaseStoryModeView) :
         if error_response :
             return error_response
 
-        return Response({
+        initial_scene_data = {
             "scene": ai_response_content.get("scene_text"),
             "choices": ai_response_content.get("choices"),
             "story_id": id,
             "story_title": title,
             "current_moment_id": current_moment_id,
             "current_moment_title": current_moment_title,
-            "image_path" : current_moment_image
-        }, status=status.HTTP_200_OK)        
-
+            "image_path": current_moment_image
+        }
+        return Response({'initial_data': initial_scene_data}, status=status.HTTP_200_OK)
+    
 # 선택된 스토리 DB 조회 (선택지 선택 후, 진행)
 class MakeChoiceView(BaseStoryModeView):
     def post(self, request) :
@@ -369,3 +392,30 @@ class MakeChoiceView(BaseStoryModeView):
             "current_moment_title": next_moment_title,
             "image_path" : next_moment_image
         }, status=status.HTTP_200_OK)
+    
+class SaveProgressView(APIView):
+    permission_classes = [IsAuthenticated] # 👈 로그인한 유저만 저장 가능!
+
+    def post(self, request):
+        user = request.user
+        story_id = request.data.get('story_id')
+        history_data = request.data.get('history')
+
+        if not story_id or not history_data:
+            return Response({'message': '필수 데이터가 누락되었습니다.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        story = get_object_or_404(Story, id=story_id)
+        
+        last_moment_id = history_data[-1]['current_moment_id']
+        last_moment = get_object_or_404(StorymodeMoment, id=last_moment_id)
+
+        session, created = StorymodeSession.objects.update_or_create(
+            user=user,
+            story=story,
+            defaults={
+                'current_moment': last_moment,
+                'history': history_data
+            }
+        )
+        
+        return Response({'message': '성공적으로 저장되었습니다.'}, status=status.HTTP_200_OK)
