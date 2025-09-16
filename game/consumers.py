@@ -248,6 +248,8 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
 
             # ✅ 5. "selections_confirmed" 이벤트를 모든 클라이언트에게 브로드캐스트합니다.
             game_state = await GameState.get_game_state(self.room_id)
+            if game_state is None:
+                game_state = {}
             game_state["character_setup"] = final_payload
             await GameState.set_game_state(self.room_id, game_state)
 
