@@ -410,30 +410,13 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         final_results = [player_result]
 
         player_role_id = player_result['role']
-<<<<<<< HEAD
         role_to_char_map = { char['role_id']: char for char in all_characters }
         all_roles_in_scene = current_scene['round']['choices'].keys()
-=======
-        
-        # 역할 ID와 캐릭터 객체를 매핑
-        role_to_char_map = {
-            char['role_id']: char for char in all_characters
-        }
-
-        # 전체 역할 목록에서 플레이어 역할을 제외하고 AI 역할만 남깁니다.
-        scene_choices = current_scene.get('round', {}).get('choices', {})
-        all_roles_in_scene = scene_choices.keys()
->>>>>>> origin/develop
         ai_roles = [role for role in all_roles_in_scene if role != player_role_id]
 
         for role_id in ai_roles:
             ai_char_obj = role_to_char_map.get(role_id)
-<<<<<<< HEAD
             choices_for_role = current_scene['round']['choices'].get(role_id, [])
-=======
-            choices_for_role = scene_choices.get(role_id, [])
-            
->>>>>>> origin/develop
             if ai_char_obj and choices_for_role:
                 ai_result = self._simulate_ai_turn(ai_char_obj, choices_for_role, "초급")
                 if ai_result:
@@ -444,7 +427,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         results_summary = ""
         for res in final_results:
             try:
-<<<<<<< HEAD
                 choice_text = next(c['text'] for c in current_scene['round']['choices'][res['role']] if c['id'] == res['choiceId'])
                 used_bits = []
                 if res.get("usedSkillId"): used_bits.append(f"스킬:{res['usedSkillId']}")
@@ -462,35 +444,12 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
                 )
             except (KeyError, StopIteration):
                 results_summary += f"- {res.get('characterName', res['role'])}: 행동 정보 없음 -> {res['grade']} 판정\n"
-=======
-                # 'choices' 딕셔너리에서 선택지 텍스트를 찾습니다.
-                choice_text = next(c['text'] for c in scene_choices.get(res['role'], []) if c['id'] == res['choiceId'])
-                results_summary += f"- {res.get('characterName', res['role'])} (역할: {res['role']}): '{choice_text}' 행동 -> {res['grade']} 판정\n"
-            except (KeyError, StopIteration):
-                 results_summary += f"- {res.get('characterName', res['role'])}: 행동 정보 없음 -> {res['grade']} 판정\n"
-
-        character_details_summary_list = []
-        for char in all_characters:
-            skills_str = ", ".join([s['name'] for s in char.get('skills', [])])
-            items_str = ", ".join([i['name'] for i in char.get('items', [])])
-            character_details_summary_list.append(
-                f"{char['name']} (스킬: {skills_str if skills_str else '없음'}, 아이템: {items_str if items_str else '없음'})"
-            )
-        character_details_summary = "\n".join(character_details_summary_list)
-
->>>>>>> origin/develop
 
         narration_prompt = f"""
         TRPG 게임의 한 턴이 진행되었습니다. 모든 캐릭터의 행동과 판정 결과는 다음과 같습니다.
         {results_summary}
-<<<<<<< HEAD
         이 모든 상황을 종합하여, 2~3문장으로 흥미진진하게 서술해주세요.
         가능하면 사용된 스킬/아이템의 효과(이점/추가 보정, 연막/빛/치유 등)를 자연스럽게 묘사에 녹여주세요.
-=======
-        아래는 현재 캐릭터들의 정보입니다. 이들의 스킬이나 아이템을 활용하여 서술하면 좋습니다.
-        {character_details_summary}
-        이 모든 상황을 종합하여, 무슨 일이 일어났는지 2~3 문장으로 흥미진진하게 서술해주세요.
->>>>>>> origin/develop
         """
 
         # 3) LLM 호출
@@ -761,11 +720,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             "full_log_history": log_history,
             "conversation_history": conversation_history,
             "sceneIndex": data.get("sceneIndex", 0),
-<<<<<<< HEAD
-=======
-            "playerState": data.get("playerState", {}),
-            # 프론트엔드 표시에 필요할 수 있는 기타 정보들
->>>>>>> origin/develop
             "description": data.get("description", ""),
             "choices": data.get("choices", {}),
             "selectedChoices": data.get("selectedChoice", {}),
@@ -820,29 +774,9 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
     def create_system_prompt_for_json(self, scenario, characters):
         """LLM이 구조화된 JSON을 생성하도록 지시하는 시스템 프롬프트"""
-<<<<<<< HEAD
         char_descriptions = "\n".join(
             [f"- **{c['name']}** ({c['description']})\n  - 능력치: {c.get('ability', {}).get('stats', {})}" for c in characters]
         )
-=======
-        
-        char_descriptions_list = []
-        for c in characters:
-            # 스킬 목록을 문자열로 변환
-            skills_info = "\n".join([f"    - {s['name']}: {s['description']}" for s in c.get('skills', [])])
-            # 아이템 목록을 문자열로 변환
-            items_info = "\n".join([f"    - {i['name']}: {i['description']}" for i in c.get('items', [])])
-
-            description = f"""- **{c['name']}** ({c['description']})
-    - 능력치: {c.get('stats', {})}
-    - 스킬:\n{skills_info if skills_info else "    - 없음"}
-    - 아이템:\n{items_info if items_info else "    - 없음"}"""
-            char_descriptions_list.append(description)
-        
-        char_descriptions = "\n".join(char_descriptions_list)
-        
-        # [수정] fragments 키를 JSON 스키마에서 완전히 제거합니다.
->>>>>>> origin/develop
         json_schema = """
         {
           "id": "string (예: scene0)",
