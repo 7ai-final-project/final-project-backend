@@ -108,12 +108,12 @@ class RoomDetailView(generics.RetrieveDestroyAPIView):
             raise PermissionDenied("방장은 본인 방만 삭제할 수 있습니다.")
         try:
             room_id = instance.id
-            #instance.deleted_at = timezone.now()
+            instance.deleted_at = timezone.now()
             instance.status = "finish"
             instance.is_deleted = True 
             
-            instance.save(update_fields=["status", "is_deleted"])
-            #instance.save(update_fields=["deleted_at", "status", "is_deleted"])
+            #instance.save(update_fields=["status", "is_deleted"])
+            instance.save(update_fields=["deleted_at", "status", "is_deleted"])
             
             instance.selected_by_room.update(is_ready=False)
 
@@ -177,11 +177,11 @@ class LeaveRoomView(APIView):
         
         if remaining_count == 0:
             # 남은 인원이 0명이면 방을 삭제(소프트 삭제) 처리합니다.
-            #room.deleted_at = timezone.now()
+            room.deleted_at = timezone.now()
             room.status = "finish"
             room.is_deleted = True
-            room.save(update_fields=["status", "is_deleted"])
-            #room.save(update_fields=["deleted_at", "status", "is_deleted"])
+            #room.save(update_fields=["status", "is_deleted"])
+            room.save(update_fields=["deleted_at", "status", "is_deleted"])
             
             # 모든 클라이언트에게 방이 삭제되었음을 알립니다.
             broadcast_room(room.id, {"type": "room_deleted", "room_id": room.id})
