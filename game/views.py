@@ -332,17 +332,32 @@ class GameRoomSelectScenarioView(APIView):
         if room.owner != request.user:
             raise PermissionDenied("방장만 게임 옵션을 변경할 수 있습니다.")
 
-        # 1. Serializer를 통해 프론트에서 온 데이터가 유효한지 먼저 검사합니다.
         serializer = GameRoomSelectScenarioSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True) # 유효하지 않으면 400 에러를 자동으로 발생시킴
-
-        # 2. 유효성이 검증된 데이터(validated_data)를 사용하여 저장합니다.
+        serializer.is_valid(raise_exception=True)
+        
         selection, created = GameRoomSelectScenario.objects.update_or_create(
             gameroom=room,
             defaults=serializer.validated_data
         )
 
-        # 3. 최종적으로 저장된 객체를 다시 시리얼라이즈하여 응답합니다.
+        # ✅ [핵심 수정] 옵션 저장 후, 모든 클라이언트에게 변경 내용을 브로드캐스트합니다.
+        # Serializer의 .data는 객체가 아닌 ID를 포함하므로, 직접 객체에서 이름을 추출합니다.
+        payload = {
+            "type": "options_update",
+            "options": {
+                "scenarioId": selection.scenario.id,
+                "scenarioTitle": selection.scenario.title,
+                "genreId": selection.genre.id,
+                "genreName": selection.genre.name,
+                "difficultyId": selection.difficulty.id,
+                "difficultyName": selection.difficulty.name,
+                "modeId": selection.mode.id,
+                "modeName": selection.mode.name,
+            }
+        }
+        broadcast_room(room.id, payload)
+        # ✅ 여기까지 추가
+
         response_serializer = GameRoomSelectScenarioSerializer(instance=selection)
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
@@ -365,16 +380,13 @@ class MySessionDetailView(APIView):
     """
     permission_classes = [IsAuthenticated] # 로그인한 유저만 접근 가능
 
-    def get(self, request, pk, format=None): # URL의 <uuid:pk>를 받기 위해 'pk'로 변경
+    def get(self, request, pk, format=None): # URL의 <uuid:pk>는 방의 ID 입니다.
         try:
-            session = MultimodeSession.objects.get(
-                user=request.user,
-                gameroom_id=pk # 'room_id' 대신 'pk'를 사용
-            )
+            session = MultimodeSession.objects.get(gameroom_id=pk)
             serializer = MultimodeSessionSerializer(session)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except MultimodeSession.DoesNotExist:
             return Response(
-                {"detail": "저장된 세션이 없습니다."}, 
+                {"detail": "해당 방에 저장된 세션이 없습니다."}, 
                 status=status.HTTP_404_NOT_FOUND
             )
