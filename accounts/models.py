@@ -22,9 +22,9 @@ class UserManager(BaseUserManager) :
 # 사용자
 class User(AbstractBaseUser, PermissionsMixin) :
     id = models.UUIDField(primary_key=True, editable=False, default=uuid.uuid4)
-    email = models.EmailField(max_length=255, unique=True)
+    email = models.EmailField(max_length=255, unique=True, null=True, blank=True)
     name = models.CharField(max_length=50)
-    nickname = models.CharField(max_length=50, null=True, blank=True)
+    nickname = models.CharField(max_length=25, unique=True, null=True, blank=True)
     joined_at = models.DateTimeField(auto_now_add=True)
     social_id = models.CharField(max_length=255)
     social_type = models.CharField(max_length=50)
