@@ -42,6 +42,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             user = message.user
             username = getattr(user, "name", None) or getattr(user, "username", None) or "Unknown"
             result.append({
+                'user_id': str(user.id),
                 'user': username,
                 'message': message.message,
                 'created_at': message.created_at.isoformat(),
@@ -89,6 +90,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                     {
                         "type": "chat.message",
                         "message_data": {
+                            'user_id': str(user.id),
                             "user": username,
                             "message": new_message_obj.message,
                             "created_at": new_message_obj.created_at.isoformat(),

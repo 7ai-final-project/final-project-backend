@@ -108,3 +108,51 @@ class GameState:
             return turn_order[new_index]
         else:
             return None
+        
+    @staticmethod
+    async def set_user_ready_for_next_scene(room_id, user_id):
+        """지정된 사용자를 '다음 씬 준비' 상태로 Redis Set에 추가합니다."""
+        conn = await GameState._get_conn()
+        key = f"game:{room_id}:next_scene_ready_users"
+        await conn.sadd(key, user_id)
+        # 키가 자동으로 만료되도록 시간 설정 (예: 1시간)
+        await conn.expire(key, 3600)
+
+    # ✅ [추가] 준비된 유저 목록을 가져오는 함수
+    @staticmethod
+    async def get_ready_users_for_next_scene(room_id):
+        """'다음 씬 준비' 상태인 모든 사용자의 ID를 Set으로 반환합니다."""
+        conn = await GameState._get_conn()
+        key = f"game:{room_id}:next_scene_ready_users"
+        return await conn.smembers(key)
+
+    # ✅ [추가] 다음 씬으로 넘어간 후, 준비 상태를 초기화하는 함수
+    @staticmethod
+    async def clear_ready_users_for_next_scene(room_id):
+        """'다음 씬 준비' 상태 Set을 삭제하여 초기화합니다."""
+        conn = await GameState._get_conn()
+        key = f"game:{room_id}:next_scene_ready_users"
+        await conn.delete(key)
+
+    @staticmethod
+    async def store_turn_result(room_id, user_id, result_data):
+        conn = await GameState._get_conn()
+        key = f"game:{room_id}:turn_results"
+        await conn.hset(key, user_id, json.dumps(result_data))
+        await conn.expire(key, 3600) # 1시간 후 만료
+
+    # ✅ [추가] 이번 턴에 제출된 모든 플레이어 결과를 가져오기
+    @staticmethod
+    async def get_all_turn_results(room_id):
+        conn = await GameState._get_conn()
+        key = f"game:{room_id}:turn_results"
+        results_json = await conn.hgetall(key)
+        # JSON 문자열을 다시 파이썬 딕셔너리로 변환
+        return {uid: json.loads(res) for uid, res in results_json.items()}
+
+    # ✅ [추가] 턴 결과 데이터 초기화
+    @staticmethod
+    async def clear_turn_results(room_id):
+        conn = await GameState._get_conn()
+        key = f"game:{room_id}:turn_results"
+        await conn.delete(key)

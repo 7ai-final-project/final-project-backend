@@ -84,6 +84,7 @@ class GoogleCallbackView(APIView) :
 
             # 로그인
             token = RefreshToken.for_user(user)
+            print('google token', token)
 
             # 사용자 정보 직렬화
             serializer = UserSerializer(user)
@@ -168,6 +169,7 @@ class KakaoCallbackView(APIView) :
 
             # 로그인
             token = RefreshToken.for_user(user)
+            print('kakao token',token)
 
             # 사용자 정보 직렬화
             serializer = UserSerializer(user)
