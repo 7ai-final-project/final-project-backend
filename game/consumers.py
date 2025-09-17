@@ -19,14 +19,8 @@ from .scenarios_turn import get_scene_template
 from .round import perform_turn_judgement
 from .state import GameState
 
-<<<<<<< HEAD
-# ★ SHARI 엔진 연동
-from asgiref.sync import sync_to_async
-from llm.multi_mode.gm_engine import AIGameMaster, apply_gm_result_to_state  # ★
-=======
 from asgiref.sync import sync_to_async
 from llm.multi_mode.gm_engine import AIGameMaster, apply_gm_result_to_state
->>>>>>> origin/develop
 
 # .env 파일 로드
 load_dotenv()
@@ -181,10 +175,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                     await self.send_json({"type": "error", "message": "다른 플레이어가 이미 선택한 캐릭터입니다."})
                     return
 
-<<<<<<< HEAD
-=======
                 # ✅ [수정 2] 선택 정보에 사용자 ID를 명확하게 포함
->>>>>>> origin/develop
                 participant_to_update["selected_character"] = {
                     "id": str(character.id),
                     "name": character.name,
@@ -197,13 +188,6 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             await self._broadcast_state()
 
         elif action == "confirm_selections":
-<<<<<<< HEAD
-            final_setup_data = content.get("setup_data")
-            if not final_setup_data:
-                await self.send_json({"type": "error", "message": "설정 데이터가 없습니다."})
-                return
-
-=======
             # ✅ [수정] 방장만 이 액션을 실행할 수 있도록 권한 확인 로직 추가
             get_room_with_owner = database_sync_to_async(GameRoom.objects.select_related("owner").get)
             room = await get_room_with_owner(pk=self.room_id)
@@ -212,7 +196,6 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 return
 
             # ✅ 1. 서버의 캐시에서 최종 상태를 가져옵니다. (클라이언트 데이터를 믿지 않음)
->>>>>>> origin/develop
             room_state = await database_sync_to_async(_get_room_state_from_cache)(self.room_id)
             
             # ✅ 2. 방의 시나리오(토픽)를 기반으로 DB에서 모든 캐릭터 목록을 가져옵니다.
@@ -272,14 +255,10 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
 
             await self.channel_layer.group_send(
                 self.group_name,
-<<<<<<< HEAD
-                { "type": "selections_confirmed", "payload": final_setup_data },
-=======
                 {
                     "type": "selections_confirmed",
                     "payload": final_payload,
                 },
->>>>>>> origin/develop
             )
 
         elif action == "set_options":
@@ -494,11 +473,7 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         self.group_name = f"game_{self.room_id}"
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
-<<<<<<< HEAD
-        self.gm = AIGameMaster()  # ★ SHARI GM 엔진 인스턴스
-=======
         self.gm = AIGameMaster()
->>>>>>> origin/develop
         print(f"✅ LLM GameConsumer connected for room: {self.room_id}")
 
     async def disconnect(self, code):
@@ -565,18 +540,11 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         stats_dict = character.get('ability', {}).get('stats', {})
         return stats_dict.get(stat_kr, 0)
 
-<<<<<<< HEAD
-    def _simulate_ai_turn(self, ai_character, choices_for_role, difficulty):
-        """(폴백용) AI 캐릭터의 d20 판정"""
-        if not choices_for_role:
-            return None
-=======
     def _simulate_ai_turn_result(self, ai_character, choices_for_role, difficulty, role_id):
         """AI 캐릭터의 턴을 시뮬레이션하고 상세 판정 결과를 딕셔너리로 반환합니다."""
         if not choices_for_role:
             return None 
 
->>>>>>> origin/develop
         ai_choice = random.choice(choices_for_role)
         dice = random.randint(1, 20)
         stat_kr = ai_choice['appliedStat']
@@ -601,46 +569,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             "characterId": ai_character['id'],
         }
 
-<<<<<<< HEAD
-    # ★ SHARI 엔진용 state 구성
-    def _build_gm_state(self, all_characters: list, current_scene: dict, turn: int = 0) -> dict:
-        world = {
-            "time": "밤",
-            "location": current_scene.get("round", {}).get("title") or current_scene.get("id") or "현장",
-            "notes": current_scene.get("round", {}).get("description", "")
-        }
-        party = []
-        for ch in all_characters or []:
-            pid = str(ch.get("role_id") or ch.get("id") or ch.get("name"))
-            sheet = {
-                "stats": (ch.get("ability", {}) or {}).get("stats", {}),
-                "skills": ch.get("skills", []),
-                "items": ch.get("items", []),
-                "spells": ch.get("spells", []),
-            }
-            party.append({
-                "id": pid,
-                "name": ch.get("name") or pid,
-                "role": ch.get("role_id") or "",
-                "sheet": sheet,
-                "memory": ch.get("memory", "")
-            })
-        return {
-            "session_id": str(self.room_id),
-            "turn": int(turn),
-            "scenario": { "title": "In-Game", "summary": "" },
-            "world": world,
-            "party": party,
-            "log": []
-        }
-
-    # backend/game/consumers.py 안의 GameConsumer 클래스에 있는 함수 교체
-    async def handle_turn_resolution_with_ai(self, player_result, all_characters):
-        """플레이어 결과를 받고, AI 턴을 시뮬레이션한 후, 종합 결과를 LLM에 보내 서술을 생성합니다."""
-        state = await GameState.get_game_state(self.room_id)
-        current_scene = state.get("current_scene")
-        history = state.get("conversation_history", [])
-=======
     def _build_shari_state(self, all_characters: list, current_scene: dict, history: list) -> dict:
         """현재 게임 정보를 SHARI 엔진이 요구하는 state JSON 형식으로 변환합니다."""
         party = []
@@ -686,74 +614,11 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         history = state.get("conversation_history", [])
         # ✨ 난이도 정보를 state에서 가져옵니다 (없을 경우 기본값).
         difficulty = state.get("difficulty", "초급") 
->>>>>>> origin/develop
 
         if not current_scene:
             await self.send_error_message("오류: 현재 씬 정보를 찾을 수 없습니다.")
             return
 
-<<<<<<< HEAD
-        # 1) 플레이어 + AI 결과 합치기
-        final_results = [player_result]
-
-        player_role_id = player_result['role']
-        role_to_char_map = { char['role_id']: char for char in all_characters }
-        all_roles_in_scene = current_scene['round']['choices'].keys()
-        ai_roles = [role for role in all_roles_in_scene if role != player_role_id]
-
-        for role_id in ai_roles:
-            ai_char_obj = role_to_char_map.get(role_id)
-            choices_for_role = current_scene['round']['choices'].get(role_id, [])
-            if ai_char_obj and choices_for_role:
-                ai_result = self._simulate_ai_turn(ai_char_obj, choices_for_role, "초급")
-                if ai_result:
-                    ai_result['characterName'] = ai_char_obj['name']
-                    final_results.append(ai_result)
-
-        # 2) 결과 요약(스킬/아이템 사용 정보 반영)
-        results_summary = ""
-        for res in final_results:
-            try:
-                choice_text = next(c['text'] for c in current_scene['round']['choices'][res['role']] if c['id'] == res['choiceId'])
-                used_bits = []
-                if res.get("usedSkillId"): used_bits.append(f"스킬:{res['usedSkillId']}")
-                if res.get("usedItemId"):  used_bits.append(f"아이템:{res['usedItemId']}")
-                used_str = f" (보조: {', '.join(used_bits)})" if used_bits else ""
-                ue = res.get("usedEffects") or {}
-                bonus_note = []
-                if ue.get("advantage"): bonus_note.append("이점")
-                if (ue.get("extraBonus") or 0) != 0: bonus_note.append(f"보정+{ue['extraBonus']}")
-                if bonus_note:
-                    used_str += f"{' ' if used_str else ''}[{', '.join(bonus_note)}]"
-                results_summary += (
-                    f"- {res.get('characterName', res['role'])} (역할: {res['role']}): "
-                    f"'{choice_text}' 행동{used_str} -> {res['grade']} 판정\n"
-                )
-            except (KeyError, StopIteration):
-                results_summary += f"- {res.get('characterName', res['role'])}: 행동 정보 없음 -> {res['grade']} 판정\n"
-
-        narration_prompt = f"""
-        TRPG 게임의 한 턴이 진행되었습니다. 모든 캐릭터의 행동과 판정 결과는 다음과 같습니다.
-        {results_summary}
-        이 모든 상황을 종합하여, 2~3문장으로 흥미진진하게 서술해주세요.
-        가능하면 사용된 스킬/아이템의 효과(이점/추가 보정, 연막/빛/치유 등)를 자연스럽게 묘사에 녹여주세요.
-        """
-
-        # 3) LLM 호출
-        try:
-            completion = await oai_client.chat.completions.create(
-                model=OAI_DEPLOYMENT,
-                messages=[
-                    {"role": "system", "content": "당신은 모든 상황을 종합하여 결과를 서술하는 TRPG 게임 마스터입니다."},
-                    {"role": "user", "content": narration_prompt}
-                ],
-                max_tokens=500, temperature=0.8
-            )
-            narration = completion.choices[0].message.content.strip()
-            history.append({"role": "user", "content": f"(이번 턴 요약:\n{results_summary})"})
-            history.append({"role": "assistant", "content": narration})
-            await GameState.set_game_state(self.room_id, {"current_scene": current_scene, "conversation_history": history})
-=======
         # 1. SHARI 엔진에 입력할 데이터 준비 (기존과 동일)
         shari_state = self._build_shari_state(all_characters, current_scene, history)
         
@@ -796,7 +661,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             print(f"🚀 SHARI 엔진 호출 시작. Turn: {shari_state['turn']}")
             gm_result = await sync_to_async(self.gm.resolve_turn)(state=shari_state, choices=shari_choices)
             print("🎉 SHARI 엔진 응답 수신 완료.")
->>>>>>> origin/develop
         except Exception as e:
             print(f"❌ SHARI 엔진 호출 중 심각한 오류 발생: {e}")
             await self.send_error_message(f"AI 게임 마스터 엔진 오류: {e}")
@@ -809,9 +673,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         next_game_state["conversation_history"].append({"role": "assistant", "content": narration})
         await GameState.set_game_state(self.room_id, next_game_state)
 
-<<<<<<< HEAD
-        # 4) 프론트로 브로드캐스트
-=======
         party_update = gm_result.get('party', [])
         if party_update:
             # 전체 캐릭터 목록에서 ID-이름 맵을 만듭니다.
@@ -822,7 +683,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
                     member['name'] = char_name_map.get(member['id'], member['id'])
         
         # ✨ 5. 프론트엔드에 '모든' 결과를 담아 브로드캐스트합니다.
->>>>>>> origin/develop
         await self.broadcast_to_group({
             "event": "turn_resolved",
             "narration": narration,
@@ -837,12 +697,7 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             "shari": gm_result.get('shari'),
         })
 
-<<<<<<< HEAD
-
-    async def handle_request_next_scene(self, user, history_data):
-=======
     async def handle_ready_for_next_scene(self, user, history_data):
->>>>>>> origin/develop
         """
         한 플레이어가 다음 씬으로 갈 준비가 되었음을 처리합니다.
         모든 플레이어가 준비되면 다음 씬을 생성합니다.
@@ -908,17 +763,8 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
     # ✅ [추가] 현재 방의 참가자 목록을 가져오는 헬퍼 함수
     @database_sync_to_async
-<<<<<<< HEAD
-    def _get_session_data_from_db(self, user, room_id):
-        try:
-            session = MultimodeSession.objects.select_related('scenario').get(user=user, gameroom_id=room_id)
-            return session
-        except MultimodeSession.DoesNotExist:
-            return None
-=======
     def _get_active_participants(self):
         return list(GameJoin.objects.filter(gameroom_id=self.room_id, left_at__isnull=True).select_related("user"))
->>>>>>> origin/develop
 
     async def handle_continue_game(self, user, saved_session):
         """
@@ -969,28 +815,15 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
     async def handle_start_game_llm(self, user, scenario_title, characters_data, is_loaded_game: bool):
         if is_loaded_game:
-<<<<<<< HEAD
-            print(f"ℹ️  불러온 게임을 시작합니다. User: {user.name}")
-            saved_session = await self._get_session_data_from_db(user, self.room_id)
-=======
             print(f"ℹ️  불러온 게임을 시작합니다. User: {user.name}, Room: {self.room_id}")
             saved_session = await _get_session_by_room_id(self.room_id)
             
->>>>>>> origin/develop
             if saved_session:
                 # 이 함수가 최종적으로 'game_loaded' 이벤트를 프론트엔드에 보냅니다.
                 await self.handle_continue_game(user, saved_session)
             else:
                 await self.send_error_message("이어할 게임 기록을 찾을 수 없습니다.")
             return
-<<<<<<< HEAD
-
-        print(f"ℹ️  새 게임 시작으로 판단하여 이전 기록을 초기화합니다. User: {user.name}")
-        if user.is_authenticated:
-            await self.clear_previous_session_history(user)
-        
-        await GameState.set_game_state(self.room_id, {})
-=======
         
         # 1. 기존 상태를 먼저 불러와서 character_setup 정보를 확보합니다.
         game_state = await GameState.get_game_state(self.room_id)
@@ -1000,7 +833,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         print(f"ℹ️  새 게임 시작. 대화 기록을 초기화하지만 캐릭터 정보는 유지합니다.")
         game_state = { "character_setup": character_setup_data } # character_setup 보존
         await GameState.set_game_state(self.room_id, game_state)
->>>>>>> origin/develop
 
         scenario = await self.get_scenario_from_db(scenario_title)
         if not scenario:
@@ -1042,22 +874,11 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             
             history.append({"role": "assistant", "content": response_text})
             
-<<<<<<< HEAD
-            # GameState에 씬 JSON 전체를 저장
-            await GameState.set_game_state(
-                self.room_id, 
-                {
-                    "current_scene": scene_json,
-                    "conversation_history": history,
-                }
-            )
-=======
             game_state = await GameState.get_game_state(self.room_id)
             game_state["current_scene"] = scene_json
             game_state["conversation_history"] = history
             await GameState.set_game_state(self.room_id, game_state)
             
->>>>>>> origin/develop
             return scene_json
         except Exception as e:
             error_message = f"LLM 응답 처리 중 오류: {e}"
@@ -1168,14 +989,9 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             "selectedChoices": data.get("selectedChoice", {}),
         }
 
-<<<<<<< HEAD
-        room_state = await database_sync_to_async(_get_room_state_from_cache)(self.room_id)
-        character_data = room_state.get("final_setup")
-=======
         # 6. 캐릭터 정보와 함께 DB에 저장
         game_state = await GameState.get_game_state(self.room_id)
         character_data = game_state.get("character_setup")
->>>>>>> origin/develop
         was_successful = await self._save_to_db(user, self.room_id, new_history_entry, character_data)
 
         if was_successful:
@@ -1215,19 +1031,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
                 defaults={
                     'user': user,  # 마지막으로 저장한 유저를 기록
                     'scenario': scenario_obj,
-<<<<<<< HEAD
-                    'choice_history': {},
-                    'character_history': character_data if character_data else {}
-                }
-            )
-
-            session.choice_history = new_entry
-            if character_data:
-                session.character_history = character_data
-            session.save(update_fields=['choice_history', 'character_history'])
-
-            print("✅ DB 저장 성공! (캐릭터 정보 포함, 덮어쓰기)")
-=======
                     'choice_history': new_entry,
                     'character_history': character_data if character_data else {},
                     'character': character_obj
@@ -1236,15 +1039,12 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
             action = "생성" if created else "업데이트"
             print(f"✅ DB 저장 성공! (Room: {room_id}, Action: {action})")
->>>>>>> origin/develop
             return True
 
         except Exception as e:
             print(f"❌ DB 저장 중 심각한 오류 발생: {e}")
             return False
 
-<<<<<<< HEAD
-=======
     async def ask_llm_for_scene_json(self, history, user_message):
         """LLM을 호출하여 JSON 형식의 씬 데이터를 받고, 파싱하여 반환"""
         history.append({"role": "user", "content": user_message})
@@ -1274,7 +1074,6 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             await self.send_error_message(error_message)
             return None
             
->>>>>>> origin/develop
     def create_system_prompt_for_json(self, scenario, characters):
         """LLM이 구조화된 JSON을 생성하도록 지시하는 시스템 프롬프트"""
         char_descriptions = "\n".join(
