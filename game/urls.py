@@ -5,6 +5,7 @@ from game.views import (
     ScenarioListView, GenreListView, DifficultyListView, ModeListView, get_scene_templates,
     GameRoomSelectScenarioView, CharacterListView, MySessionDetailView
 )
+from llm.multi_mode.gm_engine import ProposeAPIView, ResolveAPIView  # ← 추가
 
 urlpatterns = [
     # --- 멀티플레이 모드 URL ---
@@ -27,4 +28,7 @@ urlpatterns = [
     # --- 게임방 옵션 선택/저장 URL ---
     path("<uuid:pk>/options/", GameRoomSelectScenarioView.as_view(), name="room-select-scenario"),
 
+    # --- SHARI GM 엔드포인트 (추가) ---
+    path("llm/multi_mode/gm/propose", ProposeAPIView.as_view(), name="gm-propose"),
+    path("llm/multi_mode/gm/resolve", ResolveAPIView.as_view(), name="gm-resolve"),
 ]
