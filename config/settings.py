@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'allauth.socialaccount.providers.kakao',
     'allauth.socialaccount.providers.google',
+    'allauth.socialaccount.providers.microsoft',
 
     # dj-rest-auth
     'dj_rest_auth',
@@ -112,6 +113,9 @@ LOGOUT_REDIRECT_URL = '/'
 SOCIAL_AUTH_GOOGLE_CLIENT_ID = os.environ.get('SOCIAL_AUTH_GOOGLE_CLIENT_ID')
 SOCIAL_AUTH_GOOGLE_CLIENT_SECRET = os.environ.get('SOCIAL_AUTH_GOOGLE_CLIENT_SECRET')
 SOCIAL_AUTH_KAKAO_REST_API_KEY = os.environ.get('SOCIAL_AUTH_KAKAO_REST_API_KEY')
+SOCIAL_AUTH_MICROSOFT_TENANT_ID = os.getenv('SOCIAL_AUTH_MICROSOFT_TENANT_ID')
+SOCIAL_AUTH_MICROSOFT_CLIENT_ID = os.getenv('SOCIAL_AUTH_MICROSOFT_CLIENT_ID')
+SOCIAL_AUTH_MICROSOFT_CLIENT_SECRET = os.getenv('SOCIAL_AUTH_MICROSOFT_CLIENT_SECRET')
 
 SOCIALACCOUNT_PROVIDERS = {
     'google' : {
@@ -129,6 +133,19 @@ SOCIALACCOUNT_PROVIDERS = {
         'APP' : {
             'client_id' : SOCIAL_AUTH_KAKAO_REST_API_KEY
         }
+    },
+    'microsoft': {
+        'APPS': [
+            {
+                'client_id': SOCIAL_AUTH_MICROSOFT_CLIENT_ID,
+                'client_secret': SOCIAL_AUTH_MICROSOFT_CLIENT_SECRET,
+                'settings': {
+                    'tenant': SOCIAL_AUTH_MICROSOFT_TENANT_ID,
+                    'login_url': 'https://login.microsoftonline.com',
+                    'graph_url': 'https://graph.microsoft.com',
+                }
+            }
+        ]
     }
 }
 
