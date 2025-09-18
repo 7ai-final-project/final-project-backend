@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from game.models import (
     GameRoom, GameJoin,
-    Scenario, Genre, Difficulty, Mode, GameRoomSelectScenario,Character, MultimodeSession
+    Scenario, Genre, Difficulty, Mode, GameRoomSelectScenario,Character, MultimodeSession, SinglemodeSession
 )
 from django.contrib.auth.hashers import make_password
 
@@ -160,3 +160,29 @@ class MultimodeSessionSerializer(serializers.ModelSerializer):
     def get_mode(self, obj):
         options = self.get_game_options(obj)
         return options.mode.name if options and options.mode else None
+    
+class SinglemodeSessionSerializer(serializers.ModelSerializer):
+    """싱글플레이어 게임 세션 데이터를 위한 Serializer"""
+    
+    # ForeignKey로 연결된 모델의 이름을 가져오도록 설정
+    scenario = serializers.StringRelatedField()
+    difficulty = serializers.StringRelatedField()
+    genre = serializers.StringRelatedField()
+    mode = serializers.StringRelatedField()
+    character = serializers.StringRelatedField()
+
+    class Meta:
+        model = SinglemodeSession
+        fields = [
+            'id', 
+            'scenario', 
+            'difficulty', 
+            'genre', 
+            'mode', 
+            'character',
+            'choice_history', 
+            'character_history', 
+            'status',
+            'started_at',
+            'ended_at',
+        ]

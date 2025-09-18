@@ -14,18 +14,78 @@ from django.contrib.auth.hashers import check_password
 
 from game.models import (
     GameRoom, GameJoin, Scenario, Genre,
-    Difficulty, Mode, GameRoomSelectScenario, Character, MultimodeSession
+    Difficulty, Mode, GameRoomSelectScenario, Character, MultimodeSession,SinglemodeSession
 )
 from game.serializers import (
     GameRoomSerializer, ScenarioSerializer, GenreSerializer,
-    DifficultySerializer, ModeSerializer, GameRoomSelectScenarioSerializer, CharacterSerializer, MultimodeSessionSerializer
+    DifficultySerializer, ModeSerializer, GameRoomSelectScenarioSerializer, CharacterSerializer, MultimodeSessionSerializer, SinglemodeSessionSerializer
 )
+
+import json
+import uuid
+import re
+import random
+from openai import AsyncAzureOpenAI # 비동기 호출을 위해 유지
+import os
+from dotenv import load_dotenv
+
+from .gm_engine import AIGameMaster  # 멀티플레이 전용
+from . import gm_engine_single       # 싱글플레이 전용
 
 # Channels 브로드캐스트
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from game import scenarios_turn
+
+load_dotenv()
+oai_client = AsyncAzureOpenAI(
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    api_version=os.getenv("AZURE_OPENAI_VERSION", "2025-01-01-preview"),
+)
+OAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+GM_ENGINE = AIGameMaster()
+
+def create_system_prompt_for_json(scenario, characters):
+    # 이 함수의 내용은 consumers.py에 있던 것과 동일합니다.
+    # ... (이전 답변에 제공된 전체 함수 코드를 여기에 붙여넣으세요) ...
+    char_descriptions = "\n".join(
+        [f"- **{c['name']}** ({c['description']})\n  - 능력치: {c.get('stats', {})}" for c in characters]
+    )
+    json_schema = """
+    {
+      "id": "string (예: scene0)", "index": "number (예: 0)", "roleMap": { "캐릭터이름": "역할ID" },
+      "round": {
+        "title": "string", "description": "string",
+        "choices": { "역할ID": [{ "id": "string", "text": "string", "appliedStat": "string", "modifier": "number" }] }
+      }
+    }"""
+    prompt = f"""
+    당신은 TRPG 게임의 시나리오를 실시간으로 생성하는 AI입니다. 당신의 임무는 사용자 행동에 따라 다음 게임 씬 데이터를 "반드시" 아래의 JSON 스키마에 맞춰 생성하는 것입니다.
+    ## 게임 배경\n- 시나리오: {scenario.title} ({scenario.description})\n- 참가 캐릭터 정보: {char_descriptions}
+    ## 출력 JSON 스키마 (필수 준수)\n- `appliedStat` 필드의 값은 반드시 '힘', '민첩', '지식', '의지', '매력', '운' 중 하나여야 합니다.\n\n```json\n{json_schema}\n```"""
+    return {"role": "system", "content": prompt}
+
+def extract_json_block(text: str) -> str:
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.S)
+    if match: return match.group(1)
+    return text
+
+async def ask_llm_for_scene_json(oai_client, OAI_DEPLOYMENT, history, user_message):
+    history.append({"role": "user", "content": user_message})
+    try:
+        completion = await oai_client.chat.completions.create(
+            model=OAI_DEPLOYMENT, messages=history, max_tokens=4000, temperature=0.7
+        )
+        response_text = completion.choices[0].message.content
+        json_str = extract_json_block(response_text)
+        scene_json = json.loads(json_str)
+        history.append({"role": "assistant", "content": response_text})
+        return scene_json, history
+    except Exception as e:
+        print(f"❌ LLM 응답 처리 중 오류: {e}")
+        return None, history
 
 def get_scene_templates(request):
     """
@@ -390,3 +450,318 @@ class MySessionDetailView(APIView):
                 {"detail": "해당 방에 저장된 세션이 없습니다."}, 
                 status=status.HTTP_404_NOT_FOUND
             )
+        
+class SingleGameInitialView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        topic = request.data.get("topic")
+        characters_data = request.data.get("characters", [])
+        my_character_data = request.data.get("myCharacter")
+
+        if not topic or not characters_data or not my_character_data:
+            return Response({"error": "토픽과 캐릭터 정보(myCharacter, characters)가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        scenario = Scenario.objects.filter(title=topic).first()
+        if not scenario:
+            return Response({"error": f"시나리오 '{topic}'을(를) 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        
+        # ✅ [수정] create_system_prompt에 my_character 대신 characters_data(전체 목록)를 전달합니다.
+        system_prompt = gm_engine_single.create_system_prompt(scenario, characters_data)
+        initial_history = [system_prompt]
+        user_message = "모든 캐릭터가 참여하는 게임의 첫 번째 씬(sceneIndex: 0)을 생성해줘. 비극적인 사건 직후의 긴장감 있는 상황으로 시작해줘."
+        
+        scene_json, history = async_to_sync(gm_engine_single.ask_llm_for_scene)(initial_history, user_message)
+        
+        if scene_json:
+            initial_state = {
+                "conversation_history": history,
+                "scenario": {"title": scenario.title, "summary": scenario.description},
+                "party": characters_data
+            }
+            return Response({"scene": scene_json, "initial_state": initial_state}, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "첫 씬을 생성하는 데 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class SingleGameProceedView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        player_result = request.data.get("playerResult")
+        ai_characters = request.data.get("aiCharacters", [])
+        current_scene = request.data.get("currentScene")
+        game_state = request.data.get("gameState")
+        usage_data = request.data.get("usage")
+        
+        if not all([player_result, current_scene, game_state]):
+            return Response({"error": "필수 데이터가 누락되었습니다."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        all_player_results = [player_result]
+        scene_choices_data = current_scene.get('round', {}).get('choices', {})
+
+        # 1. AI 캐릭터 턴 시뮬레이션 (기존과 동일)
+        for ai_char in ai_characters:
+            # ... (이 부분의 코드는 변경 없이 그대로 둡니다) ...
+            role_id = current_scene.get('roleMap', {}).get(ai_char['name'])
+            if not role_id: continue
+            choices_for_role = scene_choices_data.get(role_id, [])
+            if not choices_for_role: continue
+            ai_choice = random.choice(choices_for_role)
+            dice = random.randint(1, 20)
+            stats = ai_char.get('stats', {})
+            stat_value = stats.get(ai_choice['appliedStat'], 0)
+            modifier = ai_choice['modifier']
+            total = dice + stat_value + modifier
+            dc = 13
+            grade = "F"
+            if dice == 20: grade = "SP"
+            elif dice == 1: grade = "SF"
+            elif total >= dc: grade = "S"
+            ai_result = {
+                "role": role_id, "choiceId": ai_choice['id'], "grade": grade, "dice": dice,
+                "appliedStat": ai_choice['appliedStat'], "statValue": stat_value, "modifier": modifier, 
+                "total": total, "characterName": ai_char['name'], "characterId": ai_char['id'],
+            }
+            all_player_results.append(ai_result)
+
+        # 2. AI 서사 생성을 위한 정보 준비
+        for result in all_player_results:
+            try:
+                result['choiceText'] = next(c['text'] for c in scene_choices_data.get(result['role'], []) if c['id'] == result['choiceId'])
+            except (StopIteration, KeyError):
+                result['choiceText'] = "알 수 없는 행동"
+        
+        # ✅ [핵심 수정] 스킬/아이템 사용 정보를 텍스트로 변환
+        usage_text = ""
+        if usage_data:
+            usage_type = "스킬" if usage_data.get("type") == "skill" else "아이템"
+            usage_name = usage_data.get("data", {}).get("name", "")
+            player_name = player_result.get("characterName", "플레이어")
+            if usage_name:
+                usage_text = f"또한, {player_name}은(는) '{usage_name}' {usage_type}을(를) 사용했습니다."
+
+        # ✅ 수정된 ask_llm_for_narration 함수에 usage_text 전달
+        scene_title = current_scene.get('round', {}).get('title', '알 수 없는 곳')
+        narration, shari_data = async_to_sync(gm_engine_single.ask_llm_for_narration)(
+            game_state.get('conversation_history', []),
+            scene_title,
+            all_player_results,
+            usage_text
+        )
+        
+        history = game_state.get('conversation_history', [])
+        history.append({"role": "user", "content": "플레이어들의 행동 결과 요약."})
+        history.append({"role": "assistant", "content": narration})
+        game_state['conversation_history'] = history
+
+        response_data = {
+            "narration": narration,
+            "roundResult": { "results": all_player_results },
+            "nextGameState": game_state,
+            "shari": shari_data, # ✅ 응답에 shari 데이터를 추가합니다.
+        }
+        return Response(response_data, status=status.HTTP_200_OK)
+
+class SingleGameSaveView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        game_state_to_save = request.data.get("gameState")
+        character_history_to_save = request.data.get("characterHistory")
+        character_id = request.data.get("characterId")
+        difficulty_name = request.data.get("difficulty")
+        genre_name = request.data.get("genre")
+        mode_name = request.data.get("mode")
+
+        if not all([game_state_to_save, character_history_to_save, character_id, difficulty_name, genre_name, mode_name]):
+            return Response({"error": "저장에 필요한 모든 데이터가 전송되지 않았습니다."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # ✅ [핵심 수정] 저장하기 전에 AI를 호출하여 줄거리 요약본을 생성합니다.
+        conversation_history = game_state_to_save.get('conversation_history', [])
+        summary = async_to_sync(gm_engine_single.ask_llm_for_summary)(conversation_history)
+        
+        # ✅ 생성된 요약본을 저장할 데이터(choice_history)에 추가합니다.
+        game_state_to_save['summary'] = summary
+        
+        user = request.user
+        scenario_title = game_state_to_save.get("scenario", {}).get("title")
+        
+        try:
+            scenario = Scenario.objects.filter(title=scenario_title).first()
+            character = Character.objects.filter(id=character_id).first()
+            difficulty = Difficulty.objects.filter(name=difficulty_name).first()
+            genre = Genre.objects.filter(name=genre_name).first()
+            mode = Mode.objects.filter(name=mode_name).first()
+
+            if not scenario:
+                return Response({"error": "저장할 시나리오 정보를 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+            if not character:
+                return Response({"error": "저장할 캐릭터 정보를 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+            if not difficulty:
+                difficulty = Difficulty.objects.first()
+            if not genre:
+                genre = Genre.objects.first()
+            if not mode:
+                mode = Mode.objects.first()
+
+            if not all([difficulty, genre, mode]):
+                return Response({"error": "DB에 난이도, 장르 또는 모드 데이터가 하나 이상 존재해야 합니다."}, status=500)
+
+        except Exception as e:
+            return Response({"error": f"저장에 필요한 기본 정보를 찾는 중 예외 발생: {str(e)}"}, status=500)
+
+        try:
+            session, created = SinglemodeSession.objects.update_or_create(
+                user=user,
+                scenario=scenario,
+                defaults={
+                    'choice_history': game_state_to_save, # ❗ summary가 포함된 gameState
+                    'character_history': character_history_to_save,
+                    'character': character,
+                    'difficulty': difficulty,
+                    'genre': genre,
+                    'mode': mode,
+                    'status': 'play'
+                }
+            )
+            return Response({"message": "게임 진행 상황이 저장되었습니다."}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"세션 저장 중 DB 오류 발생: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class SingleGameSessionCheckView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        scenario_id = request.query_params.get('scenario_id')
+        if not scenario_id:
+            return Response({"error": "scenario_id가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # 현재 유저와 시나리오 ID로 저장된 세션을 찾습니다.
+            session = SinglemodeSession.objects.get(user=request.user, scenario_id=scenario_id)
+            # 세션이 존재하면, Serializer를 통해 상세 정보를 반환합니다.
+            serializer = SinglemodeSessionSerializer(session)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except SinglemodeSession.DoesNotExist:
+            # 세션이 없으면 404 Not Found를 반환합니다.
+            return Response({"detail": "저장된 세션이 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+
+class SingleGameContinueView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        session_id = request.data.get('session_id')
+        if not session_id:
+            return Response({"error": "세션 ID가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # 전달받은 ID로 저장된 세션을 불러옵니다.
+            session = SinglemodeSession.objects.get(id=session_id, user=request.user)
+        except SinglemodeSession.DoesNotExist:
+            return Response({"error": "저장된 세션을 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+
+        # 저장된 기록(gameState)을 가져옵니다.
+        game_state = session.choice_history
+        history = game_state.get('conversation_history', [])
+        last_narration = "이전 줄거리에 이어서 계속됩니다."
+        
+        # 마지막 씬의 인덱스를 가져옵니다. (없으면 0)
+        current_scene_index = -1
+        for i in range(len(history) - 1, -1, -1):
+            if history[i].get('role') == 'assistant':
+                try:
+                    # assistant의 응답에서 scene index를 찾아봅니다.
+                    content_json = json.loads(gm_engine_single._extract_json_block(history[i]['content']))
+                    current_scene_index = content_json.get('index', -1)
+                    if current_scene_index != -1:
+                        break
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        
+        # 저장된 기록을 바탕으로 "다음" 씬을 생성하도록 AI에게 요청합니다.
+        user_message = f"이전에 저장된 게임을 이어서 진행합니다. 지금까지의 대화 기록을 바탕으로 다음 씬(sceneIndex: {current_scene_index + 1})을 생성해주세요."
+        
+        scene_json, updated_history = async_to_sync(gm_engine_single.ask_llm_for_scene)(history, user_message)
+
+        if scene_json:
+            game_state['conversation_history'] = updated_history
+            # 프론트엔드에 필요한 모든 데이터를 반환합니다.
+            return Response({
+                "scene": scene_json,
+                "loadedGameState": game_state,
+                "loadedCharacterHistory": session.character_history
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "다음 씬을 생성하는 데 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class SingleGameNextSceneView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        game_state = request.data.get("gameState")
+        last_narration = request.data.get("lastNarration")
+        current_scene_index = request.data.get("currentSceneIndex", 0)
+
+        if not game_state:
+            return Response({"error": "게임 상태 정보가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        history = game_state.get('conversation_history', [])
+        user_message = f"이전 턴의 결과는 다음과 같아: \"{last_narration}\"\n이 결과를 바탕으로, 흥미진진한 다음 이야기(sceneIndex: {current_scene_index + 1})를 JSON 형식으로 생성해줘."
+        
+        scene_json, updated_history = async_to_sync(gm_engine_single.ask_llm_for_scene)(history, user_message)
+
+        if scene_json:
+            game_state['conversation_history'] = updated_history
+            return Response({ "scene": scene_json, "updatedGameState": game_state }, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "다음 씬을 생성하는 데 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+class SingleGameSaveView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        game_state_to_save = request.data.get("gameState")
+        character_history_to_save = request.data.get("characterHistory")
+        character_id = request.data.get("characterId")
+        difficulty_name = request.data.get("difficulty")
+        genre_name = request.data.get("genre")
+        mode_name = request.data.get("mode")
+
+        if not all([game_state_to_save, character_history_to_save, character_id, difficulty_name, genre_name, mode_name]):
+            return Response({"error": "저장에 필요한 모든 데이터가 전송되지 않았습니다."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        conversation_history = game_state_to_save.get('conversation_history', [])
+        summary = async_to_sync(gm_engine_single.ask_llm_for_summary)(conversation_history)
+        game_state_to_save['summary'] = summary
+        
+        user = request.user
+        scenario_title = game_state_to_save.get("scenario", {}).get("title")
+        
+        try:
+            scenario = Scenario.objects.filter(title=scenario_title).first()
+            character = Character.objects.filter(id=character_id).first()
+            difficulty = Difficulty.objects.filter(name=difficulty_name).first()
+            genre = Genre.objects.filter(name=genre_name).first()
+            mode = Mode.objects.filter(name=mode_name).first()
+
+            if not scenario: return Response({"error": "저장할 시나리오 정보를 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+            if not character: return Response({"error": "저장할 캐릭터 정보를 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+            if not difficulty: difficulty = Difficulty.objects.first()
+            if not genre: genre = Genre.objects.first()
+            if not mode: mode = Mode.objects.first()
+            if not all([difficulty, genre, mode]): return Response({"error": "DB에 난이도, 장르 또는 모드 데이터가 하나 이상 존재해야 합니다."}, status=500)
+
+        except Exception as e:
+            return Response({"error": f"저장에 필요한 기본 정보를 찾는 중 예외 발생: {str(e)}"}, status=500)
+
+        try:
+            session, created = SinglemodeSession.objects.update_or_create(
+                user=user, scenario=scenario,
+                defaults={
+                    'choice_history': game_state_to_save, 'character_history': character_history_to_save,
+                    'character': character, 'difficulty': difficulty, 'genre': genre, 'mode': mode, 'status': 'play'
+                }
+            )
+            return Response({"message": "게임 진행 상황이 저장되었습니다."}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"세션 저장 중 DB 오류 발생: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

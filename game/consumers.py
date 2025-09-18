@@ -20,7 +20,7 @@ from .round import perform_turn_judgement
 from .state import GameState
 
 from asgiref.sync import sync_to_async
-from llm.multi_mode.gm_engine import AIGameMaster, apply_gm_result_to_state
+from game.gm_engine import AIGameMaster, apply_gm_result_to_state
 
 # .env 파일 로드
 load_dotenv()

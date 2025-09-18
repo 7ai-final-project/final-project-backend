@@ -3,9 +3,11 @@ from game.views import (
     RoomListCreateView, RoomDetailView, JoinRoomView, LeaveRoomView, 
     ToggleReadyView, StartMultiGameView, EndMultiGameView,
     ScenarioListView, GenreListView, DifficultyListView, ModeListView, get_scene_templates,
-    GameRoomSelectScenarioView, CharacterListView, MySessionDetailView
+    GameRoomSelectScenarioView, CharacterListView, MySessionDetailView,
+    SingleGameInitialView, SingleGameProceedView, SingleGameSaveView, SingleGameNextSceneView,
+    SingleGameSessionCheckView, SingleGameContinueView
 )
-from llm.multi_mode.gm_engine import ProposeAPIView, ResolveAPIView  # ← 추가
+from game.gm_engine import ProposeAPIView, ResolveAPIView  # ← 추가
 
 urlpatterns = [
     # --- 멀티플레이 모드 URL ---
@@ -31,4 +33,11 @@ urlpatterns = [
     # --- SHARI GM 엔드포인트 (추가) ---
     path("llm/multi_mode/gm/propose", ProposeAPIView.as_view(), name="gm-propose"),
     path("llm/multi_mode/gm/resolve", ResolveAPIView.as_view(), name="gm-resolve"),
+
+    path("single/initial/", SingleGameInitialView.as_view(), name="single-game-initial"),
+    path("single/proceed/", SingleGameProceedView.as_view(), name="single-game-proceed"),
+    path('single/next-scene/', SingleGameNextSceneView.as_view(), name='single_game_next_scene'),
+    path("single/save/", SingleGameSaveView.as_view(), name="single-game-save"),
+    path("single/session-check/", SingleGameSessionCheckView.as_view(), name="single-game-session-check"),
+    path("single/continue/", SingleGameContinueView.as_view(), name="single-game-continue"),
 ]
