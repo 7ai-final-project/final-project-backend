@@ -57,17 +57,13 @@ def _get_room_state_from_cache(room_id):
     state = cache.get(f"room_{room_id}_state")
     if state is None:
         try:
-            participants = list(GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True).select_related("user"))
-            state = {
-                "participants": [
-                    {
-                        "id": str(p.user.id),
-                        "username": p.user.name,
-                        "is_ready": p.is_ready,
-                        "selected_character": None
-                    } for p in participants
-                ]
-            }
+            participants_qs = GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True).select_related("user")
+            serialized_participants = GameJoinSerializer(participants_qs, many=True).data
+            participants_for_state = [
+                {**p, "selected_character": None} for p in serialized_participants
+            ]
+            
+            state = {"participants": participants_for_state}
             cache.set(f"room_{room_id}_state", state, timeout=3600)
         except Exception as e:
             print(f"❌ 캐시 초기화 중 오류 발생: {e}")
@@ -119,7 +115,7 @@ def _get_game_data_for_start(room_id, topic):
     # 2. 현재 방의 참가자 목록 조회
     participants = GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True).select_related("user")
     participant_data = [
-        {"id": str(p.user.id), "username": p.user.name} for p in participants
+        {"id": str(p.user.id), "username": p.user.nickname or p.user.name} for p in participants
     ]
     return character_data, participant_data
 

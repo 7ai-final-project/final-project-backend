@@ -7,11 +7,15 @@ from django.contrib.auth.hashers import make_password
 
 
 class GameJoinSerializer(serializers.ModelSerializer):
-    username = serializers.ReadOnlyField(source="user.name")
+    id = serializers.UUIDField(source='user.id', read_only=True)
+    username = serializers.SerializerMethodField()
 
     class Meta:
         model = GameJoin
         fields = ["id", "username", "is_ready"]
+
+    def get_username(self, obj):
+        return obj.user.nickname or obj.user.name
 
 class GameRoomSerializer(serializers.ModelSerializer):
     owner = serializers.UUIDField(source='owner.id', read_only=True)

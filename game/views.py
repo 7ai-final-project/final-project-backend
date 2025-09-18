@@ -492,6 +492,7 @@ class SingleGameProceedView(APIView):
         current_scene = request.data.get("currentScene")
         game_state = request.data.get("gameState")
         usage_data = request.data.get("usage")
+        all_characters = request.data.get("allCharacters", [])
         
         if not all([player_result, current_scene, game_state]):
             return Response({"error": "필수 데이터가 누락되었습니다."}, status=status.HTTP_400_BAD_REQUEST)
@@ -548,6 +549,27 @@ class SingleGameProceedView(APIView):
             all_player_results,
             usage_text
         )
+
+        party_state = []
+        character_hurt_map = (shari_data.get("update", {}) or {}).get("characterHurt", {})
+
+        for char in all_characters:
+            sheet = {
+                "stats": char.get('stats', {}),
+                "skills": char.get('skills', []),
+                "items": char.get('items', []),
+                "status": [] # 기본 상태는 '정상'
+            }
+            # Shari 데이터에 '부상' 플래그가 있으면 상태에 추가
+            if character_hurt_map.get(char['id'], False):
+                sheet["status"].append("부상")
+            
+            party_state.append({
+                "id": char['id'],
+                "name": char['name'],
+                "role": current_scene.get('roleMap', {}).get(char['name'], '알 수 없음'),
+                "sheet": sheet
+            })
         
         history = game_state.get('conversation_history', [])
         history.append({"role": "user", "content": "플레이어들의 행동 결과 요약."})
@@ -558,7 +580,8 @@ class SingleGameProceedView(APIView):
             "narration": narration,
             "roundResult": { "results": all_player_results },
             "nextGameState": game_state,
-            "shari": shari_data, # ✅ 응답에 shari 데이터를 추가합니다.
+            "shari": shari_data,
+            "party_state": party_state,
         }
         return Response(response_data, status=status.HTTP_200_OK)
 
