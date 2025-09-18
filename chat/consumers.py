@@ -3,6 +3,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from .models import ChatMessage
 from game.models import GameRoom
+from .serializers import MessageSerializer
 
 class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
@@ -37,20 +38,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         """
         messages = ChatMessage.objects.filter(gameroom_id=room_id).order_by('-created_at')[:50]
         
-        result = []
-        for message in messages:
-            user = message.user
-            username = getattr(user, "name", None) or getattr(user, "username", None) or "Unknown"
-            result.append({
-                'user_id': str(user.id),
-                'user': username,
-                'message': message.message,
-                'created_at': message.created_at.isoformat(),
-            })
-        
-        # 최신 메시지가 아래에 오도록 순서를 뒤집어 반환
-        result.reverse()
-        return result
+        return MessageSerializer(messages, many=True).data
 
     @database_sync_to_async
     def create_chat_message(self, user, room_id, message):
@@ -82,19 +70,13 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             new_message_obj = await self.create_chat_message(user, self.room_id, message_text)
 
             if new_message_obj:
-                username = getattr(user, "name", None) or getattr(user, "username", None) or "Unknown"
+                serialized_message = MessageSerializer(new_message_obj).data
 
-                # ✅ 3. 채널 그룹에 메시지 타입과 전체 데이터를 함께 전송
                 await self.channel_layer.group_send(
                     self.room_group_name,
                     {
                         "type": "chat.message",
-                        "message_data": {
-                            'user_id': str(user.id),
-                            "user": username,
-                            "message": new_message_obj.message,
-                            "created_at": new_message_obj.created_at.isoformat(),
-                        }
+                        "message_data": serialized_message
                     }
                 )
 
