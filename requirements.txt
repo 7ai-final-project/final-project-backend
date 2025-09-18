@@ -9,6 +9,7 @@ django-redis==6.0.0
 djangorestframework==3.16.1
 djangorestframework_simplejwt==5.5.1
 openai==1.102.0
+psycopg2-binary==2.9.10
 python-dotenv==1.1.1
 redis==6.4.0
 requests==2.32.5
