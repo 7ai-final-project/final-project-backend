@@ -69,6 +69,12 @@ from typing import Any, Dict, List, Optional
 from django.conf import settings
 from openai import AzureOpenAI
 
+from game.prompt_builders import build_scene_prompt
+from game.azure_image import generate_scene_image
+import os
+
+IMAGE_GEN_ENABLED = os.getenv("IMAGE_GEN_ENABLED", "true").lower() in ("1","true","yes")
+
 logger = logging.getLogger(__name__)
 
 
@@ -441,6 +447,34 @@ class AIGameMaster:
 
         # 결과 보정 (필수 키/개인 묘사/인벤토리·스킬 구조 등)
         result = _normalize_result(state, result)
+        # ✅ (신규) 이번 턴 장면 이미지 생성
+        if IMAGE_GEN_ENABLED:
+            try:
+                scene_prompt = build_scene_prompt(state, result)  # 현 상태 + 이번 턴 결과를 반영
+                img_res = generate_scene_image(
+                    scene_prompt,
+                    size="1024x1024",
+                    quality="standard",
+                    style="vivid",
+                    n=1
+                )
+                if img_res.get("ok"):
+                    data = (img_res["result"].get("data") or [])
+                    image_url = data[0].get("url") if data else None
+                    result["image"] = {
+                        "url": image_url,
+                        "prompt": img_res.get("prompt")
+                    }
+                else:
+                    result["image"] = {
+                        "url": None,
+                        "error": img_res.get("error"),
+                        "prompt": img_res.get("prompt")
+                    }
+            except Exception as e:
+                # 로거가 있으니 그대로 사용
+                logger.exception("이미지 생성 실패: %s", e)
+                result["image"] = {"url": None, "error": str(e)}
         return result
 
 
