@@ -57,13 +57,17 @@ def _get_room_state_from_cache(room_id):
     state = cache.get(f"room_{room_id}_state")
     if state is None:
         try:
-            participants_qs = GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True).select_related("user")
-            serialized_participants = GameJoinSerializer(participants_qs, many=True).data
-            participants_for_state = [
-                {**p, "selected_character": None} for p in serialized_participants
-            ]
-            
-            state = {"participants": participants_for_state}
+            participants = list(GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True).select_related("user"))
+            state = {
+                "participants": [
+                    {
+                        "id": str(p.user.id),
+                        "username": p.user.name,
+                        "is_ready": p.is_ready,
+                        "selected_character": None
+                    } for p in participants
+                ]
+            }
             cache.set(f"room_{room_id}_state", state, timeout=3600)
         except Exception as e:
             print(f"❌ 캐시 초기화 중 오류 발생: {e}")
@@ -115,7 +119,7 @@ def _get_game_data_for_start(room_id, topic):
     # 2. 현재 방의 참가자 목록 조회
     participants = GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True).select_related("user")
     participant_data = [
-        {"id": str(p.user.id), "username": p.user.nickname or p.user.name} for p in participants
+        {"id": str(p.user.id), "username": p.user.name} for p in participants
     ]
     return character_data, participant_data
 
@@ -687,10 +691,12 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
                 "sceneIndex": current_scene['index'],
                 "results": all_player_results, # ✨ human_player_results 대신 all_player_results를 사용
                 "shari_rolls": gm_result.get('shari', {}).get('rolls', []),
+                "image": gm_result.get('image'),
             },
             "world_update": gm_result.get('world'),
             "party_update": party_update,
             "shari": gm_result.get('shari'),
+            "image": gm_result.get('image'),
         })
 
     async def handle_ready_for_next_scene(self, user, history_data):
