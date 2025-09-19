@@ -57,8 +57,11 @@ def _get_room_state_from_cache(room_id):
     state = cache.get(f"room_{room_id}_state")
     if state is None:
         try:
+            # Serializer를 사용하여 참가자 목록을 직렬화합니다.
             participants_qs = GameJoin.objects.filter(gameroom_id=room_id, left_at__isnull=True).select_related("user")
             serialized_participants = GameJoinSerializer(participants_qs, many=True).data
+            
+            # 각 참가자에게 'selected_character' 기본값을 추가합니다.
             participants_for_state = [
                 {**p, "selected_character": None} for p in serialized_participants
             ]
@@ -83,9 +86,9 @@ def _toggle_ready(room_id, user):
         rp = GameJoin.objects.get(gameroom_id=room_id, user=user)
         rp.is_ready = not rp.is_ready
         rp.save(update_fields=["is_ready"])
-        return True
+        return rp.is_ready
     except GameJoin.DoesNotExist:
-        return False
+        return None
     
 @database_sync_to_async
 def _get_session_by_room_id(room_id):
@@ -321,19 +324,20 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 )
 
         elif action == "toggle_ready":
-            # 1. (핵심 수정) DB의 is_ready 상태를 직접 업데이트하는 함수를 호출합니다.
-            success = await _toggle_ready(self.room_id, user)
-            if not success:
+            # 1. DB의 is_ready 상태를 업데이트하고, 그 결과를 new_ready_state에 받습니다.
+            new_ready_state = await _toggle_ready(self.room_id, user)
+            
+            if new_ready_state is None:
                 await self.send_json({"type": "error", "message": "참가자 정보를 찾을 수 없어 준비 상태를 변경할 수 없습니다."})
                 return
 
-            # 2. DB 업데이트 후, 캐시 상태도 동기화하고 브로드캐스트합니다. (기존 로직)
+            # 2. DB 업데이트 후, 캐시 상태도 동기화합니다.
             room_state = await database_sync_to_async(_get_room_state_from_cache)(self.room_id)
             found = False
             for participant in room_state["participants"]:
                 if participant["id"] == str(user.id):
-                    # DB와 동일한 상태가 되도록 캐시의 is_ready 값을 토글합니다.
-                    participant["is_ready"] = not participant["is_ready"]
+                    # [핵심 수정] 캐시 값을 토글하는 대신, DB에서 반환된 최종 값으로 설정합니다.
+                    participant["is_ready"] = new_ready_state
                     found = True
                     break
             
@@ -444,6 +448,15 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             "type": "room_broadcast",
             "message": event.get("payload")
         })
+
+    async def force_state_broadcast(self, event):
+        """
+        [추가] 백엔드(views.py)에서 참가자 변경이 있을 때 호출되는 핸들러입니다.
+        캐시를 지우고 최신 상태를 모든 클라이언트에게 다시 브로드캐스트합니다.
+        """
+        print(f"✅ force_state_broadcast 수신: Room {self.room_id}")
+        await database_sync_to_async(cache.delete)(f"room_{self.room_id}_state")
+        await self._broadcast_state()
     
     async def selections_confirmed(self, event):
         await self.send_json({

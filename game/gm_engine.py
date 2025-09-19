@@ -376,7 +376,7 @@ class AIGameMaster:
         language: str = "ko",
         temperature: float = 0.7,
         top_p: float = 0.95,
-        max_tokens: int = 1500,
+        max_tokens: int = 2500,
     ) -> Dict[str, Any]:
         next_turn = int(state.get("turn", 0)) + 1
         prev_turn = next_turn - 1
@@ -435,6 +435,7 @@ class AIGameMaster:
         try:
             result = json.loads(_extract_json_block(txt))
         except Exception as e:
+            logger.error("JSON 파싱 실패. 모델 원본 응답:\n---\n%s\n---", txt)
             logger.exception("해결 JSON 파싱 실패: %s", e)
             raise ValueError("해결 JSON 파싱 실패(응답 형식 오류).")
 
