@@ -36,7 +36,7 @@ SECRET_KEY = 'django-insecure-0fn7+z2s#7$jf9#r#0tgq^f^&3_c_e^+emgv@a#j@+=(reo8k4
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-# ALLOWED_HOSTS = ["*", "localhost", "127.0.0.1"]
+ALLOWED_HOSTS = ["*"]
 
 # Application definition
 INSTALLED_APPS = [
@@ -180,8 +180,11 @@ ASGI_APPLICATION = "config.asgi.application"
 # Channels에서 WebSocket 지원을 위한 기본 채널 레이어 (추후 Redis 연결 예정)
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer"
-    }
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+        "CONFIG": {
+            "hosts": [("127.0.0.1", 6379)],
+        },
+    },
 }
 
 ROOT_URLCONF = 'config.urls'
