@@ -382,7 +382,7 @@ class AIGameMaster:
         language: str = "ko",
         temperature: float = 0.7,
         top_p: float = 0.95,
-        max_tokens: int = 1500,
+        max_tokens: int = 2500,
     ) -> Dict[str, Any]:
         next_turn = int(state.get("turn", 0)) + 1
         prev_turn = next_turn - 1
