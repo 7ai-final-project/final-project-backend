@@ -441,7 +441,6 @@ class AIGameMaster:
         try:
             result = json.loads(_extract_json_block(txt))
         except Exception as e:
-            logger.error("JSON 파싱 실패. 모델 원본 응답:\n---\n%s\n---", txt)
             logger.exception("해결 JSON 파싱 실패: %s", e)
             raise ValueError("해결 JSON 파싱 실패(응답 형식 오류).")
 

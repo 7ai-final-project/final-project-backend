@@ -700,10 +700,12 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
                 "sceneIndex": current_scene['index'],
                 "results": all_player_results, # ✨ human_player_results 대신 all_player_results를 사용
                 "shari_rolls": gm_result.get('shari', {}).get('rolls', []),
+                "image": gm_result.get('image'),
             },
             "world_update": gm_result.get('world'),
             "party_update": party_update,
             "shari": gm_result.get('shari'),
+            "image": gm_result.get('image'),
         })
 
     async def handle_ready_for_next_scene(self, user, history_data):
