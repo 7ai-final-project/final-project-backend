@@ -181,8 +181,14 @@ ASGI_APPLICATION = "config.asgi.application"
 # Channels에서 WebSocket 지원을 위한 기본 채널 레이어 (추후 Redis 연결 예정)
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer"
-    }
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            # 현재 Django 앱이 Docker 외부(내 컴퓨터)에서 실행되고,
+            # Redis가 포트포워딩된 Docker 컨테이너에서 실행되므로
+            # 'localhost' 또는 '127.0.0.1'로 접속해야 합니다.
+            "hosts": [("localhost", 6379)],
+        },
+    },
 }
 
 ROOT_URLCONF = 'config.urls'

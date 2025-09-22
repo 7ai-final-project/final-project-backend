@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from django.contrib.auth.models import AnonymousUser
 
 from game.models import MultimodeSession, GameRoom, GameJoin, GameRoomSelectScenario, Scenario, Character, Difficulty, Mode, Genre
-from game.serializers import GameJoinSerializer
+from game.serializers import GameJoinSerializer, GameRoomSerializer
 from .scenarios_turn import get_scene_template
 from .round import perform_turn_judgement
 from .state import GameState
@@ -125,17 +125,34 @@ def _get_game_data_for_start(room_id, topic):
 
 class RoomConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
-        try:
-            self.room_id = self.scope["url_route"]["kwargs"]["room_id"]
-            self.group_name = f"room_{self.room_id}"
-            await self.channel_layer.group_add(self.group_name, self.channel_name)
-            await self.accept()
-            await self._broadcast_state()
-        except Exception as e:
-            import traceback
-            print("❌ connect error:", e)
-            traceback.print_exc()
+        self.room_id = self.scope["url_route"]["kwargs"]["room_id"]
+        self.group_name = f"room_{self.room_id}"
+        self.user = self.scope.get("user")
+
+        if not self.user or not self.user.is_authenticated:
             await self.close()
+            return
+
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+        # [추가] 현재 연결된 유저 목록(set)에 자신을 추가
+        connected_users = cache.get(f"room_{self.room_id}_connected_users", set())
+        connected_users.add(self.user.id)
+        cache.set(f"room_{self.room_id}_connected_users", connected_users)
+        
+        await self.force_state_broadcast({})
+
+    async def disconnect(self, close_code):
+        if self.user and self.user.is_authenticated:
+            # [추가] 연결된 유저 목록에서 자신을 제거
+            connected_users = cache.get(f"room_{self.room_id}_connected_users", set())
+            connected_users.discard(self.user.id)
+            cache.set(f"room_{self.room_id}_connected_users", connected_users)
+            
+            await self.force_state_broadcast({})
+
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive_json(self, content, **kwargs):
         action = content.get("action")
@@ -184,7 +201,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 }
 
             await database_sync_to_async(_set_room_state_in_cache)(self.room_id, room_state)
-            await self._broadcast_state()
+            await self.force_state_broadcast({})
 
         elif action == "confirm_selections":
             # ✅ [수정] 방장만 이 액션을 실행할 수 있도록 권한 확인 로직 추가
@@ -345,10 +362,10 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 await database_sync_to_async(_set_room_state_in_cache)(self.room_id, room_state)
 
             # 3. 모든 클라이언트에게 변경된 상태를 알립니다.
-            await self._broadcast_state()
+            await self.force_state_broadcast({})
         
         elif action == "request_selection_state":
-            await self._broadcast_state()
+            await self.force_state_broadcast({})
 
         elif action == "start_game":
             print("✅ [start_game] 액션 수신됨.")
@@ -431,17 +448,14 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             room.status = "waiting"
             await database_sync_to_async(room.save)(update_fields=["status"])
             await database_sync_to_async(cache.delete)(f"room_{self.room_id}_state")
-            await self._broadcast_state()
-
-    async def _broadcast_state(self):
-        room_state = await database_sync_to_async(_get_room_state_from_cache)(self.room_id)
-        await self.channel_layer.group_send(
-            self.group_name,
-            {"type": "room_state", "selected_by_room": room_state["participants"]},
-        )
+            await self.force_state_broadcast({})
 
     async def room_state(self, event):
-        await self.send_json({"type": "room_state", "selected_by_room": event["selected_by_room"]})
+        # 이제 room_state는 참가자 목록만이 아닌 방 전체 정보를 포함합니다.
+        await self.send_json({
+            "type": "room_state",
+            **event["room_data"]
+        })
 
     async def room_broadcast(self, event):
         await self.send_json({
@@ -450,13 +464,36 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         })
 
     async def force_state_broadcast(self, event):
-        """
-        [추가] 백엔드(views.py)에서 참가자 변경이 있을 때 호출되는 핸들러입니다.
-        캐시를 지우고 최신 상태를 모든 클라이언트에게 다시 브로드캐스트합니다.
-        """
-        print(f"✅ force_state_broadcast 수신: Room {self.room_id}")
-        await database_sync_to_async(cache.delete)(f"room_{self.room_id}_state")
-        await self._broadcast_state()
+        # 1. DB에서 방의 기본 정보를 가져옵니다.
+        room = await database_sync_to_async(GameRoom.objects.get)(pk=self.room_id)
+        connected_user_ids = cache.get(f"room_{self.room_id}_connected_users", set())
+
+        # 2. Serializer를 통해 기본 데이터를 JSON 형태로 만듭니다.
+        serializer = GameRoomSerializer(
+            room,
+            context={'connected_user_ids': connected_user_ids}
+        )
+        serialized_data = await database_sync_to_async(lambda: serializer.data)()
+
+        # 3. ✅ 캐시에서 캐릭터 선택 정보를 가져옵니다.
+        selection_state = await database_sync_to_async(_get_room_state_from_cache)(self.room_id)
+        #    사용자 ID를 키로, 선택한 캐릭터 정보를 값으로 하는 맵(map)을 만듭니다.
+        selections_map = {p['id']: p.get('selected_character') for p in selection_state.get('participants', [])}
+
+        # 4. ✅ 기본 데이터에 캐릭터 선택 정보를 합칩니다.
+        for participant in serialized_data.get('selected_by_room', []):
+            participant_id = participant.get('id')
+            if participant_id in selections_map:
+                participant['selected_character'] = selections_map[participant_id]
+            else:
+                # 선택 정보가 없는 경우를 대비한 기본값 설정
+                participant['selected_character'] = None
+
+        # 5. ✅ 정보가 합쳐진 최종 데이터를 모든 클라이언트에게 전송합니다.
+        await self.channel_layer.group_send(
+            self.group_name,
+            {"type": "room_state", "room_data": serialized_data}
+        )
     
     async def selections_confirmed(self, event):
         await self.send_json({
