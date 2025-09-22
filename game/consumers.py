@@ -152,7 +152,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             
             await self.force_state_broadcast({})
 
-        await self.channel_layer.group_remove(self.group_name, self.channel_name)
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive_json(self, content, **kwargs):
         action = content.get("action")
@@ -464,16 +464,32 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         })
 
     async def force_state_broadcast(self, event):
+        # 1. DB에서 방의 기본 정보를 가져옵니다.
         room = await database_sync_to_async(GameRoom.objects.get)(pk=self.room_id)
         connected_user_ids = cache.get(f"room_{self.room_id}_connected_users", set())
-        
-        # Serializer에 context로 '현재 연결된 유저 ID 목록' 전달
+
+        # 2. Serializer를 통해 기본 데이터를 JSON 형태로 만듭니다.
         serializer = GameRoomSerializer(
-            room, 
+            room,
             context={'connected_user_ids': connected_user_ids}
         )
         serialized_data = await database_sync_to_async(lambda: serializer.data)()
-        
+
+        # 3. ✅ 캐시에서 캐릭터 선택 정보를 가져옵니다.
+        selection_state = await database_sync_to_async(_get_room_state_from_cache)(self.room_id)
+        #    사용자 ID를 키로, 선택한 캐릭터 정보를 값으로 하는 맵(map)을 만듭니다.
+        selections_map = {p['id']: p.get('selected_character') for p in selection_state.get('participants', [])}
+
+        # 4. ✅ 기본 데이터에 캐릭터 선택 정보를 합칩니다.
+        for participant in serialized_data.get('selected_by_room', []):
+            participant_id = participant.get('id')
+            if participant_id in selections_map:
+                participant['selected_character'] = selections_map[participant_id]
+            else:
+                # 선택 정보가 없는 경우를 대비한 기본값 설정
+                participant['selected_character'] = None
+
+        # 5. ✅ 정보가 합쳐진 최종 데이터를 모든 클라이언트에게 전송합니다.
         await self.channel_layer.group_send(
             self.group_name,
             {"type": "room_state", "room_data": serialized_data}
