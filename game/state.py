@@ -2,7 +2,7 @@ import redis.asyncio as aioredis
 from .scenarios_turn import get_scene_template
 import json
 
-REDIS_URL = "redis://localhost:6379"
+REDIS_URL = "redis://redis:6379"
 
 class GameState:
     @staticmethod
