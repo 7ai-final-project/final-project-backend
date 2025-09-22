@@ -112,6 +112,16 @@ def broadcast_room(room_id, payload):
         {"type": "room.broadcast", "payload": payload},
     )
 
+def broadcast_state_update(room_id):
+    """
+    [신규] Consumer에게 상태를 다시 계산하여 브로드캐스트하도록 지시하는 함수
+    """
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"room_{room_id}",
+        {"type": "force.state.broadcast"}, # RoomConsumer의 핸들러 이름과 맞춤
+    )
+
 class RoomListCreateView(generics.ListCreateAPIView):
     queryset = GameRoom.objects.filter(is_deleted=False).order_by("-created_at")  
     #queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at") # 삭제되지 않은 방만 조회하도록 변경
@@ -147,7 +157,7 @@ class RoomListCreateView(generics.ListCreateAPIView):
             room = serializer.save(owner=self.request.user)
             # 👇 이 부분은 이미 올바르게 수정되어 있었습니다.
             GameJoin.objects.get_or_create(gameroom=room, user=self.request.user)
-            broadcast_room(room.id, {"type": "room_created", "room_id": room.id})
+            broadcast_room(room.id, {"type": "room_created", "room_id": str(room.id)})
         except Exception as e:
             raise ValidationError({"detail": f"방 생성 실패: {str(e)}"})
 
@@ -177,7 +187,7 @@ class RoomDetailView(generics.RetrieveDestroyAPIView):
             
             instance.selected_by_room.update(is_ready=False)
 
-            broadcast_room(room_id, {"type": "room_deleted", "room_id": room_id})
+            broadcast_room(room_id, {"type": "room_deleted", "room_id": str(room_id)})
         except Exception as e:
             raise ValidationError({"detail": f"방 삭제 실패: {str(e)}"})
 
@@ -212,7 +222,7 @@ class JoinRoomView(APIView):
         room.refresh_from_db()
         
         data = GameRoomSerializer(room).data
-        broadcast_room(room.id, {"type": "join", "user": user.email})
+        broadcast_state_update(room.id)
         return Response(data, status=status.HTTP_200_OK)
 
 class LeaveRoomView(APIView):
@@ -227,33 +237,38 @@ class LeaveRoomView(APIView):
         except GameJoin.DoesNotExist:
             raise NotFound("이 방의 참가자가 아닙니다.")
 
-        # 먼저, 나가는 유저의 상태를 업데이트합니다.
+        # 나가는 유저가 현재 방장인지 확인합니다.
+        is_owner_leaving = (room.owner == user)
+
         participant.is_ready = False
         participant.left_at = timezone.now()
         participant.save(update_fields=['is_ready', 'left_at'])
         
-        # 유저가 나간 후, 방에 남은 활성 참가자 수를 확인합니다.
-        remaining_count = room.selected_by_room.filter(left_at__isnull=True).count()
+        # 유저가 나간 후, 방에 남은 활성 참가자 목록을 가져옵니다.
+        remaining_participants = room.selected_by_room.filter(left_at__isnull=True)
         
-        if remaining_count == 0:
-            # 남은 인원이 0명이면 방을 삭제(소프트 삭제) 처리합니다.
+        if not remaining_participants.exists():
+            # [기존 로직 유지] 남은 인원이 0명이면 방을 삭제 처리합니다.
             room.deleted_at = timezone.now()
             room.status = "finish"
             room.is_deleted = True
-            #room.save(update_fields=["status", "is_deleted"])
             room.save(update_fields=["deleted_at", "status", "is_deleted"])
-            
-            # 모든 클라이언트에게 방이 삭제되었음을 알립니다.
-            broadcast_room(room.id, {"type": "room_deleted", "room_id": room.id})
-            
-            # 방이 삭제되었으므로 별도 콘텐츠 없이 성공 응답을 보냅니다.
+            broadcast_room(room.id, {"type": "room_deleted", "room_id": str(room.id)})
             return Response(status=status.HTTP_204_NO_CONTENT)
         
         else:
-            # 아직 방에 다른 유저가 남아있으면, 퇴장 사실만 알립니다.
-            broadcast_room(room.id, {"type": "leave", "user": user.email})
-            return Response(GameRoomSerializer(room).data, status=status.HTTP_200_OK)
+            # [핵심 수정] 나간 사람이 방장이었고, 남은 인원이 있다면 방장을 위임합니다.
+            if is_owner_leaving:
+                # 가장 먼저 입장한 사람 (GameJoin의 pk가 가장 낮은 사람)을 새 방장으로 지정합니다.
+                next_owner_participant = remaining_participants.order_by('pk').first()
+                if next_owner_participant:
+                    room.owner = next_owner_participant.user
+                    room.save(update_fields=['owner'])
 
+            # 변경된 정보(참가자 목록, 새 방장)를 모든 클라이언트에게 알립니다.
+            broadcast_state_update(room.id)
+            room.refresh_from_db() # 최신 정보로 갱신하여 응답
+            return Response(GameRoomSerializer(room).data, status=status.HTTP_200_OK)
 
 class ToggleReadyView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -400,23 +415,20 @@ class GameRoomSelectScenarioView(APIView):
             defaults=serializer.validated_data
         )
 
-        # ✅ [핵심 수정] 옵션 저장 후, 모든 클라이언트에게 변경 내용을 브로드캐스트합니다.
-        # Serializer의 .data는 객체가 아닌 ID를 포함하므로, 직접 객체에서 이름을 추출합니다.
         payload = {
             "type": "options_update",
             "options": {
-                "scenarioId": selection.scenario.id,
+                "scenarioId": str(selection.scenario.id),
                 "scenarioTitle": selection.scenario.title,
-                "genreId": selection.genre.id,
+                "genreId": str(selection.genre.id),
                 "genreName": selection.genre.name,
-                "difficultyId": selection.difficulty.id,
+                "difficultyId": str(selection.difficulty.id),
                 "difficultyName": selection.difficulty.name,
-                "modeId": selection.mode.id,
+                "modeId": str(selection.mode.id),
                 "modeName": selection.mode.name,
             }
         }
         broadcast_room(room.id, payload)
-        # ✅ 여기까지 추가
 
         response_serializer = GameRoomSelectScenarioSerializer(instance=selection)
         return Response(response_serializer.data, status=status.HTTP_200_OK)
