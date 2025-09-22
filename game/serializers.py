@@ -9,13 +9,20 @@ from django.contrib.auth.hashers import make_password
 class GameJoinSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(source='user.id', read_only=True)
     username = serializers.SerializerMethodField()
+    # 👇 [추가] '자리 비움' 상태를 위한 필드
+    is_away = serializers.SerializerMethodField()
 
     class Meta:
         model = GameJoin
-        fields = ["id", "username", "is_ready"]
+        # 👇 [수정] is_away 필드 추가
+        fields = ["id", "username", "is_ready", "is_away"]
 
     def get_username(self, obj):
         return obj.user.nickname or obj.user.name
+
+    def get_is_away(self, obj):
+        connected_user_ids = self.context.get('connected_user_ids', [])
+        return obj.user.id not in connected_user_ids
 
 class GameRoomSerializer(serializers.ModelSerializer):
     owner = serializers.UUIDField(source='owner.id', read_only=True)
@@ -52,7 +59,7 @@ class GameRoomSerializer(serializers.ModelSerializer):
     def get_selected_by_room(self, obj):
         """현재 방에 있는 참가자(나가지 않은 사람) 목록만 반환합니다."""
         participants = obj.selected_by_room.filter(left_at__isnull=True)
-        serializer = GameJoinSerializer(participants, many=True)
+        serializer = GameJoinSerializer(participants, many=True, context=self.context)
         return serializer.data
 
     def get_current_players(self, obj):

@@ -198,31 +198,32 @@ class JoinRoomView(APIView):
         room = get_object_or_404(GameRoom, pk=pk)
         user = request.user
 
-        # 이미 참가 중인지 확인 (left_at이 null인 경우만)
-        if room.selected_by_room.filter(user=user, left_at__isnull=True).exists():
-            # 이미 참가 중이면 그냥 성공 처리
-            data = GameRoomSerializer(room).data
-            return Response(data, status=status.HTTP_200_OK)
-        
-        # 방이 꽉 찼는지 확인 (left_at이 null인 경우만)
+        # 방 인원 및 비밀번호 확인 (기존과 동일)
         if room.selected_by_room.filter(left_at__isnull=True).count() >= room.max_players:
-            raise ValidationError("방이 가득 찼습니다.")
+            if not room.selected_by_room.filter(user=user, left_at__isnull=True).exists():
+                raise ValidationError("방이 가득 찼습니다.")
         
-        # 비밀방인 경우, 비밀번호 확인
         if room.room_type == 'private':
             password = request.data.get('password')
-            # room.password가 None이거나 비어있는지, 혹은 비밀번호가 맞는지 확인
             if not room.password or not check_password(password, room.password):
                 raise PermissionDenied("비밀번호가 올바르지 않습니다.")
 
-        # 모든 검사를 통과했으면 참가자로 추가
-        GameJoin.objects.create(gameroom=room, user=user)
+        # [핵심 수정] 참가 기록을 직접 조회하고 처리합니다.
+        participant = GameJoin.objects.filter(gameroom=room, user=user).first()
         
-        # 참가자가 추가된 최신 방 상태를 다시 로드
-        room.refresh_from_db()
+        if participant:
+            # 이미 참가 기록이 있다면 (재입장), 상태만 업데이트합니다.
+            participant.is_ready = False
+            participant.left_at = None
+            participant.save(update_fields=['is_ready', 'left_at'])
+        else:
+            # 참가 기록이 없다면 (신규 입장), 새로 생성합니다.
+            GameJoin.objects.create(gameroom=room, user=user, is_ready=False)
         
-        data = GameRoomSerializer(room).data
         broadcast_state_update(room.id)
+        
+        room.refresh_from_db()
+        data = GameRoomSerializer(room).data
         return Response(data, status=status.HTTP_200_OK)
 
 class LeaveRoomView(APIView):

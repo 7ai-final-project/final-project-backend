@@ -469,7 +469,6 @@ class UserStoriesProgressView(APIView):
 
         # 1. 사용자가 플레이한 모든 '스토리'의 ID를 중복 없이 가져옵니다.
         played_story_ids = StorymodeSession.objects.filter(user=user).values_list('story_id', flat=True).distinct()
-        print(f"📝 [디버깅] 1. 조회된 played_story_ids: {list(played_story_ids)}") # 2. 스토리 ID 조회 확인
         
         if not played_story_ids:
             print("❌ [디버깅] 플레이한 스토리가 없어 함수를 종료합니다.")
@@ -483,23 +482,17 @@ class UserStoriesProgressView(APIView):
         story_progress_list = []
         # 2. 각 스토리를 기준으로 루프를 돕니다.
         for story in stories:
-            print(f"\n🔄 [디버깅] '{story.title}' 스토리 처리 시작")
-            # 3. 해당 스토리에 대한 모든 세션 기록을 가져옵니다.
             sessions_for_this_story = StorymodeSession.objects.filter(user=user, story=story)
             
             unlocked_ending_titles = set()
 
             # 4. 모든 세션의 'history'를 전부 확인하여 달성한 엔딩을 통합합니다.
             for session in sessions_for_this_story:
-                print(f"  - [디버깅] 세션 ID {session.id} (상태: {session.status}) 확인 중...")
                 if session.history and isinstance(session.history, list):
                     for moment_data in session.history:
                         if isinstance(moment_data, dict) and moment_data.get('current_moment_title', '').startswith('ENDING_'):
-                            # history 안에서 'ENDING_'으로 시작하는 제목을 찾아 set에 추가합니다. (중복 자동 제거)
                             unlocked_ending_titles.add(moment_data.get('current_moment_title'))
-            
-            print(f"  - [디버깅] 📝 '{story.title}'에서 찾은 엔딩 목록: {unlocked_ending_titles}") # 3. 찾은 엔딩 확인
-            
+
             # 5. 통합된 엔딩 개수를 최종 집계합니다.
             unlocked_count = len(unlocked_ending_titles)
             
@@ -517,7 +510,6 @@ class UserStoriesProgressView(APIView):
                 'unlocked_endings': unlocked_count,
             })
 
-        print(f"\n✅ [디버깅] 최종적으로 프론트에 전달될 데이터: {story_progress_list}") # 4. 최종 결과 확인
         return Response({
             'message': '유저의 스토리 진행률 목록 조회 성공',
             'progress_list': story_progress_list,
