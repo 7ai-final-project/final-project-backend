@@ -1,7 +1,9 @@
 import re
 import json
+from django.utils import timezone
 from openai import AzureOpenAI
 from django.conf import settings
+from django.db.models import Count
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -239,11 +241,13 @@ class StartGameView(BaseStoryModeView) :
 
         if should_continue :
             saved_session = StorymodeSession.objects.filter(user=user, story=story).first()
-            if saved_session and isinstance(saved_session.history, list) and len(saved_session.history) > 0 :
+            # 🟢 수정된 로직: status가 'play'인 세션만 이어하기를 허용합니다.
+            if saved_session and saved_session.status == 'play' and isinstance(saved_session.history, list) and len(saved_session.history) > 0 :
                 return Response({'saved_history': saved_session.history}, status=status.HTTP_200_OK)
-            
-        # 만약 '처음부터 시작하기'를 누르면 기존 기록을 삭제하고 싶다면, 아래 주석을 해제하세요.
-        # StorymodeSession.objects.filter(user=user, story=story).delete()
+
+        # '처음부터 시작'을 누르거나, '이어서하기'를 눌렀지만 완료된(finish) 세션일 경우,
+        # 기존 세션 기록을 삭제하고 새로 시작합니다.
+        StorymodeSession.objects.filter(user=user, story=story).delete()
         
         story_data, error_response = self._get_story_data(story_title)
         if error_response :
@@ -302,23 +306,19 @@ class StartGameView(BaseStoryModeView) :
     
 # 선택된 스토리 DB 조회 (선택지 선택 후, 진행)
 class MakeChoiceView(BaseStoryModeView):
-    def post(self, request) :
+    def post(self, request):
+        user = request.user
         story_title = request.data.get('story_title')
         choice_index = request.data.get('choice_index')
         current_moment_id = request.data.get('current_moment_id')
 
-        if not story_title or current_moment_id is None :
-            return Response({
-                'message' : 'story_title 혹은 current_moment_id 누락'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        if choice_index is None :
-            return Response({
-                'message' : 'choice_index 누락'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        if not story_title or current_moment_id is None:
+            return Response({'message': 'story_title 혹은 current_moment_id 누락'}, status=status.HTTP_400_BAD_REQUEST)
+        if choice_index is None:
+            return Response({'message': 'choice_index 누락'}, status=status.HTTP_400_BAD_REQUEST)
 
         story_data, error_response = self._get_story_data(story_title)
-        if error_response :
+        if error_response:
             return error_response
         
         id = story_data.get('id')
@@ -326,27 +326,20 @@ class MakeChoiceView(BaseStoryModeView):
         content = story_data.get('content')
         all_moments = content.get('moments')
 
-        # 다음 장면 ID 결정
         current_moments = all_moments.get(current_moment_id)
-        if not current_moments :
-            return Response({
-                'message' : '현재 장면 정보를 찾을 수 없습니다.'
-            }, status=status.HTTP_404_NOT_FOUND)
+        if not current_moments:
+            return Response({'message': '현재 장면 정보를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
         
         choices_map = current_moments.get('choices')
         next_moment_id = current_moment_id
-        if 0 <= choice_index < len(choices_map) :
+        if 0 <= choice_index < len(choices_map):
             next_moment_id = choices_map[choice_index].get('next_moment_id')
-        else :
-            return Response({
-                'message' : '유효하지 않은 선택입니다.'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({'message': '유효하지 않은 선택입니다.'}, status=status.HTTP_400_BAD_REQUEST)
 
         next_moments = all_moments.get(next_moment_id)
-        if not next_moments :
-            return Response({
-                'message' : '다음 장면 정보를 찾을 수 없습니다.'
-            }, status=status.HTTP_404_NOT_FOUND)
+        if not next_moments:
+            return Response({'message': '다음 장면 정보를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
         
         next_moment_title = next_moments.get('title', '')
         next_moment_description = next_moments.get('description', '')
@@ -357,9 +350,8 @@ class MakeChoiceView(BaseStoryModeView):
         num_choices_available = len(choices)
 
         choice_instructions = ''
-        if not is_ending :
+        if not is_ending:
             choice_instructions += '다음 선택지들은 아래 목표들로 이어지도록 만들어줘:\n'
-
             for i, choice_info in enumerate(choices):
                 target_moment_id = choice_info.get('next_moment_id')
                 target_moment_desc = all_moments.get(target_moment_id, {}).get('description', '')
@@ -380,8 +372,46 @@ class MakeChoiceView(BaseStoryModeView):
         )
 
         ai_response_content, error_response = self._call_openai_api(prompt)
-        if error_response :
+        if error_response:
             return error_response
+        
+        is_final_ending = next_moment_title.startswith('ENDING_') # 👈 엔딩 여부 확인
+        if is_final_ending:
+            try:
+                story = get_object_or_404(Story, id=id)
+                session, created = StorymodeSession.objects.get_or_create(
+                    user=user,
+                    story=story,
+                    defaults={'history': []}
+                )
+                
+                # 중복 저장을 방지하기 위해 이미 기록된 엔딩인지 확인
+                ending_already_saved = any(
+                    item.get('current_moment_id') == next_moment_id
+                    for item in (session.history if isinstance(session.history, list) else [])
+                )
+                
+                if not ending_already_saved:
+                    new_history_entry = {
+                        "scene": ai_response_content.get("scene_text"),
+                        "choices": ai_response_content.get("choices"),
+                        "story_id": id,
+                        "story_title": title,
+                        "current_moment_id": next_moment_id,
+                        "current_moment_title": next_moment_title,
+                        "image_path": next_moment_image
+                    }
+                    # history가 리스트가 아닐 경우를 대비해 초기화
+                    if not isinstance(session.history, list):
+                        session.history = []
+                    session.history.append(new_history_entry)
+                
+                session.status = 'finish'  # 👈 상태를 'finish'로 변경
+                session.end_at = timezone.now() # 👈 종료 시간 기록
+                session.current_moment = get_object_or_404(StorymodeMoment, id=next_moment_id) # 현재 위치도 마지막으로 업데이트
+                session.save()
+            except Exception as e:
+                print(f"🛑 오류: 엔딩 기록 저장 실패. {e}")
 
         return Response({
             "scene": ai_response_content.get("scene_text"),
@@ -390,11 +420,11 @@ class MakeChoiceView(BaseStoryModeView):
             "story_title": title,
             "current_moment_id": next_moment_id,
             "current_moment_title": next_moment_title,
-            "image_path" : next_moment_image
+            "image_path": next_moment_image
         }, status=status.HTTP_200_OK)
     
 class SaveProgressView(APIView):
-    permission_classes = [IsAuthenticated] # 👈 로그인한 유저만 저장 가능!
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         user = request.user
@@ -406,16 +436,81 @@ class SaveProgressView(APIView):
 
         story = get_object_or_404(Story, id=story_id)
         
+        # 마지막 장면 정보 가져오기
         last_moment_id = history_data[-1]['current_moment_id']
+        last_moment_title = history_data[-1]['current_moment_title']
         last_moment = get_object_or_404(StorymodeMoment, id=last_moment_id)
+
+        # 🟢 추가된 로직: 저장하려는 마지막 장면이 엔딩인지 확인
+        update_defaults = {
+            'current_moment': last_moment,
+            'history': history_data
+        }
+        if last_moment_title.startswith('ENDING_'):
+            update_defaults['status'] = 'finish' # 👈 상태를 'finish'로 설정
+            update_defaults['end_at'] = timezone.now() # 👈 종료 시간 기록
+        else:
+            update_defaults['status'] = 'play' # 엔딩이 아니면 'play' 상태로 유지
 
         session, created = StorymodeSession.objects.update_or_create(
             user=user,
             story=story,
-            defaults={
-                'current_moment': last_moment,
-                'history': history_data
-            }
+            defaults=update_defaults
         )
         
         return Response({'message': '성공적으로 저장되었습니다.'}, status=status.HTTP_200_OK)
+    
+class UserStoriesProgressView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        print(f"\n🔍 [디버깅] UserStoriesProgressView 시작 (요청 사용자: {user.email})") # 1. 함수 시작 확인
+
+        # 1. 사용자가 플레이한 모든 '스토리'의 ID를 중복 없이 가져옵니다.
+        played_story_ids = StorymodeSession.objects.filter(user=user).values_list('story_id', flat=True).distinct()
+        
+        if not played_story_ids:
+            print("❌ [디버깅] 플레이한 스토리가 없어 함수를 종료합니다.")
+            return Response({
+                'message': '플레이한 스토리가 없습니다.',
+                'progress_list': [],
+            }, status=status.HTTP_200_OK)
+
+        stories = Story.objects.filter(id__in=played_story_ids)
+        
+        story_progress_list = []
+        # 2. 각 스토리를 기준으로 루프를 돕니다.
+        for story in stories:
+            sessions_for_this_story = StorymodeSession.objects.filter(user=user, story=story)
+            
+            unlocked_ending_titles = set()
+
+            # 4. 모든 세션의 'history'를 전부 확인하여 달성한 엔딩을 통합합니다.
+            for session in sessions_for_this_story:
+                if session.history and isinstance(session.history, list):
+                    for moment_data in session.history:
+                        if isinstance(moment_data, dict) and moment_data.get('current_moment_title', '').startswith('ENDING_'):
+                            unlocked_ending_titles.add(moment_data.get('current_moment_title'))
+
+            # 5. 통합된 엔딩 개수를 최종 집계합니다.
+            unlocked_count = len(unlocked_ending_titles)
+            
+            # 스토리의 전체 엔딩 수를 계산합니다.
+            total_endings = StorymodeMoment.objects.filter(
+                story=story,
+                title__startswith='ENDING_'
+            ).count()
+            
+            # 최종 결과를 리스트에 추가합니다.
+            story_progress_list.append({
+                'story_id': str(story.id),
+                'story_title': story.title,
+                'total_endings': total_endings,
+                'unlocked_endings': unlocked_count,
+            })
+
+        return Response({
+            'message': '유저의 스토리 진행률 목록 조회 성공',
+            'progress_list': story_progress_list,
+        }, status=status.HTTP_200_OK)
