@@ -94,7 +94,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ORIGINS = [
     'http://127.0.0.1:8000/',
     'http://127.0.0.1:8081/',
-    'https://7ai-final-project.github.io/final-project-frontend/'
+    'https://final-project-frontend--u6jpqtwx5q.expo.app/'
 ]
 
 # USER 모델
@@ -178,15 +178,12 @@ REST_FRAMEWORK = {
 # Channels (ASGI)
 ASGI_APPLICATION = "config.asgi.application"
 
-# Channels에서 WebSocket 지원을 위한 기본 채널 레이어 (추후 Redis 연결 예정)
+# Channels에서 WebSocket 지원을 위한 기본 채널 레이어
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            # 현재 Django 앱이 Docker 외부(내 컴퓨터)에서 실행되고,
-            # Redis가 포트포워딩된 Docker 컨테이너에서 실행되므로
-            # 'localhost' 또는 '127.0.0.1'로 접속해야 합니다.
-            "hosts": [("localhost", 6379)],
+            "hosts": [("redis", 6379)],
         },
     },
 }
@@ -213,7 +210,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://127.0.0.1:6379/1",
+        "LOCATION": "redis://redis:6379/1",
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         }
