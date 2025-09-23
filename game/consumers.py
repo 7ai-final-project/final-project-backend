@@ -653,7 +653,7 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
     async def handle_turn_resolution_with_ai(self, human_player_results, all_characters):
         """
-        [교체] 모든 인간 플레이어의 결과와 AI 턴을 종합하여 SHARI 엔진으로 턴을 처리합니다.
+        [교체] 모든 인간 플레이어의 결과와 AI 턴을 종합하여 SHARI 엔진으로 턴을 처리하고, 게임 종료 조건을 확인합니다.
         """
         state = await GameState.get_game_state(self.room_id)
         current_scene = state.get("current_scene")
@@ -712,38 +712,79 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             await self.send_error_message(f"AI 게임 마스터 엔진 오류: {e}")
             return
         
-        next_game_state = apply_gm_result_to_state(state, gm_result)
-        
-        narration = gm_result.get('narration', '아무 일도 일어나지 않았습니다.')
-        next_game_state["conversation_history"].append({"role": "user", "content": f"(이번 턴 요약:\n{shari_choices})"})
-        next_game_state["conversation_history"].append({"role": "assistant", "content": narration})
-        await GameState.set_game_state(self.room_id, next_game_state)
+        is_game_over = gm_result.get("is_final_turn", False)
 
-        party_update = gm_result.get('party', [])
-        if party_update:
-            # 전체 캐릭터 목록에서 ID-이름 맵을 만듭니다.
-            char_name_map = {c['id']: c['name'] for c in all_characters}
-            # party_update 목록을 돌면서 이름이 없는 경우 채워줍니다.
-            for member in party_update:
-                if 'name' not in member or not member['name']:
-                    member['name'] = char_name_map.get(member['id'], member['id'])
-        
-        # ✨ 5. 프론트엔드에 '모든' 결과를 담아 브로드캐스트합니다.
-        await self.broadcast_to_group({
-            "event": "turn_resolved",
-            "narration": narration,
-            "personal_narrations": gm_result.get('personal', {}),
-            "roundResult": {
-                "sceneIndex": current_scene['index'],
-                "results": all_player_results, # ✨ human_player_results 대신 all_player_results를 사용
-                "shari_rolls": gm_result.get('shari', {}).get('rolls', []),
+        if is_game_over:
+            print(f"✅ 게임 종료 조건 충족 (is_final_turn=True). Room: {self.room_id}")
+            
+            # 1. 모든 클라이언트에게 게임 종료 이벤트를 브로드캐스트합니다.
+            await self.broadcast_to_group({
+                "event": "game_over",
+                "narration": gm_result.get('narration', '이야기가 막을 내립니다.'),
+                "personal_narrations": gm_result.get('personal', {}),
                 "image": gm_result.get('image'),
-            },
-            "world_update": gm_result.get('world'),
-            "party_update": party_update,
-            "shari": gm_result.get('shari'),
-            "image": gm_result.get('image'),
-        })
+            })
+
+            # 2. Redis에 저장된 게임 상태를 삭제합니다.
+            await self.clear_game_state(self.room_id)
+
+            # 3. 데이터베이스의 방 상태를 'waiting'으로 변경합니다.
+            @database_sync_to_async
+            def update_room_status(room_id):
+                try:
+                    room = GameRoom.objects.get(id=room_id)
+                    room.status = "waiting"
+                    room.save(update_fields=["status"])
+                    print(f"✅ DB의 방 상태를 'waiting'으로 변경 완료. Room: {room_id}")
+                    return True
+                except GameRoom.DoesNotExist:
+                    print(f"❌ 방 상태 변경 실패: Room {room_id}를 찾을 수 없습니다.")
+                    return False
+            
+            await update_room_status(self.room_id)
+
+        else:
+            # 기존의 턴 처리 로직을 그대로 실행합니다.
+            next_game_state = apply_gm_result_to_state(state, gm_result)
+            
+            narration = gm_result.get('narration', '아무 일도 일어나지 않았습니다.')
+            next_game_state["conversation_history"].append({"role": "user", "content": f"(이번 턴 요약:\n{shari_choices})"})
+            next_game_state["conversation_history"].append({"role": "assistant", "content": narration})
+            await GameState.set_game_state(self.room_id, next_game_state)
+
+            party_update = gm_result.get('party', [])
+            if party_update:
+                # 전체 캐릭터 목록에서 ID-이름 맵을 만듭니다.
+                char_name_map = {c['id']: c['name'] for c in all_characters}
+                # party_update 목록을 돌면서 이름이 없는 경우 채워줍니다.
+                for member in party_update:
+                    if 'name' not in member or not member['name']:
+                        member['name'] = char_name_map.get(member['id'], member['id'])
+            
+            # ✨ 5. 프론트엔드에 '모든' 결과를 담아 브로드캐스트합니다.
+            await self.broadcast_to_group({
+                "event": "turn_resolved",
+                "narration": narration,
+                "personal_narrations": gm_result.get('personal', {}),
+                "roundResult": {
+                    "sceneIndex": current_scene['index'],
+                    "results": all_player_results, # ✨ human_player_results 대신 all_player_results를 사용
+                    "shari_rolls": gm_result.get('shari', {}).get('rolls', []),
+                    "image": gm_result.get('image'),
+                },
+                "world_update": gm_result.get('world'),
+                "party_update": party_update,
+                "shari": gm_result.get('shari'),
+                "image": gm_result.get('image'),
+            })
+    
+    async def clear_game_state(self, room_id):
+        """지정된 방의 게임 상태를 캐시에서 삭제합니다."""
+        try:
+            await database_sync_to_async(cache.delete)(f"game_state_{room_id}")
+            print(f"✅ 캐시에서 게임 상태 삭제 완료. Room: {room_id}")
+        except Exception as e:
+            print(f"❌ 캐시 게임 상태 삭제 중 오류 발생: {e}")
 
     async def handle_ready_for_next_scene(self, user, history_data):
         """

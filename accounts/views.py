@@ -11,6 +11,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.views import TokenRefreshView as DRFTokenRefreshView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from accounts.services.achievement_service import AchievementService
 from accounts.models import User
 from accounts.serializers import UserSerializer
 
@@ -376,4 +377,37 @@ class LogoutView(APIView) :
             return JsonResponse({
                 'error' : str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
+class UserAchievementsView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            service = AchievementService(request.user)
+            all_achievements = service.get_all_achievements_with_status()
+            
+            for ach in all_achievements:
+                progress_info = service.get_achievement_progress_info(ach['id'])
+                if progress_info:
+                    ach['progress'] = progress_info
+                else:
+                    ach['progress'] = None
+
+            grouped_achievements = {
+                'story': [ach for ach in all_achievements if ach['mode'] == 'story'],
+                'single': [ach for ach in all_achievements if ach['mode'] == 'single'],
+                'multi': [ach for ach in all_achievements if ach['mode'] == 'multi'],
+            }
+            return JsonResponse({
+                'success': True,
+                'message': '업적이 성공적으로 조회되었습니다.',
+                'data': grouped_achievements
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            print(f"UserAchievementsView 에러: {e}")
+            return JsonResponse({
+                'success': False,
+                'message': '업적 조회 중 서버 오류가 발생했습니다.',
+                'error_detail': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

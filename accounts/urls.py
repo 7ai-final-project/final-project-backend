@@ -1,5 +1,5 @@
 from django.urls import path
-from accounts.views import GoogleCallbackView, KakaoCallbackView, MicrosoftCallbackView, UserInfoView, UserInfoUpdateView, CustomTokenRefreshView, LogoutView
+from accounts.views import GoogleCallbackView, KakaoCallbackView, MicrosoftCallbackView, UserInfoView, UserInfoUpdateView, CustomTokenRefreshView, LogoutView, UserAchievementsView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 urlpatterns = [
@@ -11,4 +11,5 @@ urlpatterns = [
     path('token/', TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path('token/refresh', CustomTokenRefreshView.as_view(), name="token_refresh"),
     path('logout', LogoutView.as_view(), name="logout"),
+    path('achievements/', UserAchievementsView.as_view(), name='user-achievements'),
 ]
