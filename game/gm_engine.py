@@ -209,13 +209,67 @@ def _normalize_result(state: Dict[str, Any], result: Dict[str, Any]) -> Dict[str
 
 
 # ----------------------------- 프롬프트 -----------------------------
+
+def _get_genre_interpretation_guide(genre: str) -> str:
+    """주어진 장르 이름에 대한 상세한 재해석 가이드를 텍스트로 반환합니다."""
+    
+    # DB의 Genre 모델 name 필드에 저장된 값을 기반으로 분기합니다.
+    if genre == "미스터리":
+        return (
+            "1. **핵심 재해석**: 이 이야기의 목표는 '누가, 왜, 어떻게 이 사건을 일으켰는가?'라는 수수께끼를 푸는 것이다.\n"
+            "2. **서사 스타일**: 모든 묘사는 단서, 증거, 알리바이, 용의자의 숨겨진 동기에 집중한다. 분위기는 긴장감 있고 의심스러워야 한다.\n"
+            "3. **능력 해석**: '관찰' 스킬은 숨겨진 단서를 찾는 데, '매력' 스킬은 용의자로부터 증언을 얻어내는 데 사용된다. '마법'은 '프로파일링'이나 '과학 수사' 같은 특수 능력으로 해석된다.\n"
+            "4. **선택지/결과 예시**: '현장을 조사하여 지문을 찾는다', '용의자의 알리바이를 추궁한다' 등 수사와 관련된 행동과 결과를 묘사해야 한다."
+        )
+    
+    if genre == "사이버펑크":
+        return (
+            "1. **핵심 재해석**: 이 이야기의 배경은 거대 기업이 모든 것을 통제하는 미래 도시이다. 목표는 기업의 통제에서 벗어나거나 시스템의 비밀을 파헤치는 것이다.\n"
+            "2. **서사 스타일**: 네온사인, 사이버웨어, 해킹, 기업 용병 등의 용어를 적극적으로 사용한다.\n"
+            "3. **능력 해석**: '마법'은 '해킹 프로그램'으로, '검'은 '플라즈마 카타나'로, '치유 물약'은 '나노머신 주사기'로 해석된다.\n"
+            "4. **선택지/결과 예시**: '보안 시스템을 해킹한다', '뒷골목 정보상과 거래한다' 등 기술과 사회적 상호작용에 집중된 행동과 결과를 묘사해야 한다."
+        )
+        
+    # 기본값 또는 장르 이름이 "판타지"일 경우
+    return (
+        "1. **핵심 재해석**: 이 이야기의 배경은 마법과 신화가 살아 숨 쉬는 세계이다. 목표는 사악한 존재를 물리치고 세계를 구하는 것이다.\n"
+        "2. **서사 스타일**: 고대의 주문, 신화 속의 존재, 마법이 깃든 유물 등 신비롭고 장엄한 분위기를 연출한다.\n"
+        "3. **능력 해석**: 스킬, 아이템, 주문을 문자 그대로 해석한다. 검, 마법, 기도 등 고전 판타지의 요소를 충실히 따른다.\n"
+        "4. **선택지/결과 예시**: '고대의 룬 문자를 해독한다', '드래곤의 둥지를 습격한다' 등 모험적인 행동과 결과를 묘사해야 한다."
+    )
+
+### ▼▼▼▼▼ 1. 난이도/페이스 조절용 헬퍼 함수 추가 ▼▼▼▼▼
+def _get_difficulty_instructions(difficulty: str) -> str:
+    if difficulty == "상급":
+        return "플레이어가 마주하는 역경의 빈도와 강도를 높여라. 성공을 위해서는 자원을 소모하거나 창의적인 해결책이 필요하도록 상황을 묘사하라. 실패 시 명확한 불이익을 부여하라."
+    if difficulty == "초급":
+        return "플레이어의 행동을 긍정적으로 해석하고, 대부분의 행동이 큰 어려움 없이 성공하도록 서술하라. 역경은 최소화하라."
+    # 기본값은 '보통'
+    return "성공과 실패가 균형을 이루도록 하라. 논리적인 행동은 보상받아야 하지만, 가끔 예상치 못한 어려움도 발생할 수 있다."
+
+def _get_pacing_instructions(current_turn: int, max_turns: int) -> str:
+    if current_turn < max_turns * 0.75: # 게임의 75%가 지나기 전
+        return f"현재 {current_turn}턴이다. 이야기의 절정(클라이맥스)을 향해 서서히 긴장감을 고조시켜라."
+    elif current_turn >= max_turns:
+        # 아래와 같이 "is_final_turn" 키를 포함하도록 명시합니다.
+        return f"현재 {current_turn}턴으로, 마지막 턴이다. 반드시 이야기의 모든 갈등을 마무리하고 최종 결말을 제시하라. 응답 JSON 최상단에 `\"is_final_turn\": true` 키를 반드시 포함시켜라."
+    else: # 게임 후반부
+        return f"현재 {current_turn}턴이다. 이제 이야기의 절정(클라이맥스) 또는 결말을 향해 빠르게 전개하라. 곧 엔딩이 가까워졌음을 암시하라."
+
 GM_SYSTEM = (
-    "너는 공정하고 창의적인 TRPG 게임 마스터(GM)다. "
+    "너는 공정하고 창의적인 TRPG 게임 마스터(GM)이며, 주어진 **{genre} 장르의 전문가**다. "
     "플레이어별로 상호작용적 선택지를 제시하고, 그 선택의 결과를 일관된 세계관과 규칙에 따라 판정한다. "
     "메타 발언/설정 파괴 금지. 플레이 템포는 경쾌하되 과도한 설명은 피한다."
 )
 
 PROPOSE_TEMPLATE = """아래의 세션 상태를 바탕으로, **각 플레이어에게 서로 다른 2~3개의 선택지**를 제시하라.
+
+**[게임 규칙]**
+- **난이도 규칙**: {difficulty_instructions}
+- **게임 진행 페이스**: 이 게임은 총 {max_turns}턴 내외로 진행된다. {pacing_instructions}
+
+**[장르 재해석 가이드: {genre}]**
+{genre_interpretation_guide}
 
 제시 원칙:
 - 각 플레이어의 역할/시트/기억과 **보유 스킬/아이템/주문**을 고려하여 차별화
@@ -244,6 +298,13 @@ PROPOSE_TEMPLATE = """아래의 세션 상태를 바탕으로, **각 플레이�
 
 # === SHARI 전용 Resolve 템플릿 (ANU + 1d6 룰) — 항상 이 템플릿만 사용 ===
 RESOLVE_TEMPLATE_SHARI = """아래의 세션 상태와 플레이어 선택을 바탕으로, **한 턴의 결과**를 작성하라.
+
+**[게임 규칙]**
+- **난이도 규칙**: {difficulty_instructions}
+- **게임 진행 페이스**: 이 게임은 총 {max_turns}턴 내외로 진행된다. {pacing_instructions}
+
+**[장르 재해석 가이드: {genre}]**
+{genre_interpretation_guide}
 
 원칙:
 - Assess → Narrate → Update(ANU)를 따른다.
@@ -346,20 +407,37 @@ class AIGameMaster:
         next_turn = int(state.get("turn", 0)) + 1
         state_json = json.dumps(state, ensure_ascii=False)
         cap_summary = _summarize_party_capabilities(state)
+        scenario = state.get("scenario", {})
+        genre = scenario.get("genre", "판타지")
+        difficulty = state.get("difficulty", "중급")
+        current_turn = state.get("turn", 1)
+        max_turns = 10 # 최대 턴 수 설정
+
+        genre_guide = _get_genre_interpretation_guide(genre)
+        difficulty_instructions = _get_difficulty_instructions(difficulty)
+        pacing_instructions = _get_pacing_instructions(current_turn, max_turns)        
 
         prompt = PROPOSE_TEMPLATE.format(
             state_json=state_json,
             next_turn=next_turn,
             language=language,
-            cap_summary=cap_summary
+            cap_summary=cap_summary,
+            genre=genre,                      
+            genre_interpretation_guide=genre_guide,
+            difficulty_instructions=difficulty_instructions,
+            max_turns=max_turns,
+            pacing_instructions=pacing_instructions            
         )
         logger.debug(
             "propose_choices: tokens[max]=%s, state_len=%s, cap_len=%s",
             max_tokens, len(state_json), len(cap_summary)
         )
+
+        system_prompt_content = GM_SYSTEM.format(genre=genre)
+
         resp = self.client.chat.completions.create(
             model=self.deployment,
-            messages=[{"role": "system", "content": GM_SYSTEM},
+            messages=[{"role": "system", "content": system_prompt_content},
                       {"role": "user", "content": prompt}],
             temperature=temperature,
             top_p=top_p,
@@ -411,6 +489,15 @@ class AIGameMaster:
         state_json = json.dumps(state, ensure_ascii=False)
         choices_json = json.dumps(choices, ensure_ascii=False)
         cap_summary = _summarize_party_capabilities(state)
+        scenario = state.get("scenario", {})
+        genre = scenario.get("genre", "판타지")
+        difficulty = state.get("difficulty", "중급")
+        current_turn = state.get("turn", 1)
+        max_turns = 10 # 최대 턴 수 설정
+
+        genre_guide = _get_genre_interpretation_guide(genre)
+        difficulty_instructions = _get_difficulty_instructions(difficulty)
+        pacing_instructions = _get_pacing_instructions(current_turn, max_turns)
 
         prompt = RESOLVE_TEMPLATE_SHARI.format(
             state_json=state_json,
@@ -418,7 +505,12 @@ class AIGameMaster:
             next_turn=next_turn,
             prev_turn=prev_turn,
             language=language,
-            cap_summary=cap_summary
+            cap_summary=cap_summary,
+            genre=genre,                      
+            genre_interpretation_guide=genre_guide,
+            difficulty_instructions=difficulty_instructions,
+            max_turns=max_turns,
+            pacing_instructions=pacing_instructions            
         ) + extra_hint
 
         logger.debug(
@@ -426,9 +518,11 @@ class AIGameMaster:
             max_tokens, len(state_json), len(choices_json), len(cap_summary), bool(rolls_hint)
         )
 
+        system_prompt_content = GM_SYSTEM.format(genre=genre)
+
         resp = self.client.chat.completions.create(
             model=self.deployment,
-            messages=[{"role": "system", "content": GM_SYSTEM},
+            messages=[{"role": "system", "content": system_prompt_content},
                       {"role": "user", "content": prompt}],
             temperature=temperature,
             top_p=top_p,

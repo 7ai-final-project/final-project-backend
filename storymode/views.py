@@ -247,7 +247,7 @@ class StartGameView(BaseStoryModeView) :
 
         # '처음부터 시작'을 누르거나, '이어서하기'를 눌렀지만 완료된(finish) 세션일 경우,
         # 기존 세션 기록을 삭제하고 새로 시작합니다.
-        StorymodeSession.objects.filter(user=user, story=story).delete()
+        # StorymodeSession.objects.filter(user=user, story=story).delete()
         
         story_data, error_response = self._get_story_data(story_title)
         if error_response :

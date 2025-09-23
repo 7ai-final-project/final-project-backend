@@ -5,6 +5,7 @@ from rest_framework import generics, permissions, status, viewsets
 from django.db.models import Q
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from rest_framework.views import APIView
@@ -122,10 +123,16 @@ def broadcast_state_update(room_id):
         {"type": "force.state.broadcast"}, # RoomConsumer의 핸들러 이름과 맞춤
     )
 
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 10  # 한 페이지에 기본적으로 10개의 항목을 보여줍니다.
+    page_size_query_param = 'page_size' # 클라이언트가 페이지 크기를 직접 지정할 수 있게 합니다.
+    max_page_size = 100 # 클라이언트가 요청할 수 있는 최대 페이지 크기입니다.
+
 class RoomListCreateView(generics.ListCreateAPIView):
     queryset = GameRoom.objects.filter(is_deleted=False).order_by("-created_at")  
     #queryset = GameRoom.objects.filter(deleted_at__isnull=True).order_by("-created_at") # 삭제되지 않은 방만 조회하도록 변경
     serializer_class = GameRoomSerializer
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         queryset = GameRoom.objects.exclude(
