@@ -12,8 +12,24 @@ logger = logging.getLogger(__name__)
 STYLE_DESCRIPTION = (
     "Simple and clean 8-bit pixel art, minimalist, retro video game asset, "
     "clear outlines, Korean fairy tale theme. No Japanese or Chinese elements."
+    "Single cinematic pixel-art scene (not a sprite sheet). "
+    "Do NOT include any text, letters, numbers, symbols, runes, UI, HUD, captions, "
+    "logos, signage, labels, credits, watermarks, panels or bottom bars. "
+    "No character selection strip or silhouettes. If you are about to draw any writing, leave it blank."
 )
 STYLE_TEXT = os.getenv("AZURE_IMAGE_STYLE", STYLE_DESCRIPTION)
+
+# 🚫 새로 추가: 텍스트·숫자 금지 문구(영/한 동시 주입; 환경변수로 덮어쓰기 가능)
+NO_TEXT_CLAUSE = os.getenv(
+    "AZURE_IMAGE_NO_TEXT",
+    (
+        "Do NOT draw any text, numbers, letters, symbols, signs, captions, UI, "
+        "logos, or watermarks. All signs and banners must be blank. "
+        "No Hangul/Korean, English, Chinese, or any writing of any kind. "
+        "/ 텍스트·숫자·글자(한글/영문/한자)·기호·간판·자막·UI·로고·워터마크를 그리지 말 것. "
+        "모든 간판/현수막은 비워둘 것."
+    )
+)
 
 # ---- DALL·E(Images API) 설정 ----
 DEFAULT_MODEL_DEPLOYMENT = os.getenv("AZURE_OPENAI_DALLE_DEPLOYMENT") or ""
@@ -132,7 +148,8 @@ def _compose_prompt(raw: str) -> str:
     base = _translate_to_english(base)
     # 2) 스타일(영어) 붙이기
     style = _sanitize_prompt(STYLE_TEXT, max_len=300)
-    final = f"{base}\n\n{style}".strip()
+    no_text = _sanitize_prompt(NO_TEXT_CLAUSE, max_len=300)  # 🚫 추가
+    final = f"{base}\n\n{style}\n\n{no_text}".strip()        # 🚫 항상 함께 전송
     return final
 
 def generate_scene_image(
