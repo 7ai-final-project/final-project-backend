@@ -225,7 +225,7 @@ DATABASE_PORT = os.environ.get('DATABASE_PORT')
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
-        'NAME' : 'project',
+        'NAME' : 'project_test',
         'USER' : DATABASE_USER,
         'PASSWORD' : DATABASE_PASSWORD,
         'HOST' : DATABASE_HOST,
