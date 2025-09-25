@@ -1,64 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-llm/multi_mode/gm_engine.py
 
-멀티플레이 TRPG의 AI GM 엔진 (SHARI 방식 고정).
-- 각 플레이어에게 **서로 다른 선택지**를 제시 (propose_choices)
-- 플레이어 입력(선택)을 모아 **다음 턴 내러티브/상태**를 계산 (resolve_turn)
-- 결과(JSON)를 세션 상태에 병합 (apply_gm_result_to_state)
-- 세션 상태는 호출자가 관리(캐시/DB). 본 모듈은 상태 JSON을 입력/출력으로만 다룸.
-
-상태(JSON) 최소 스펙:
-{
-  "session_id": "uuid 혹은 식별자",
-  "turn": 1,
-  "scenario": { "title": "...", "summary": "..." },
-  "world": { "time": "밤", "location": "폐허 성곽", "notes": "..." },
-  "party": [
-    { "id":"p1", "name":"엘라", "role":"정찰수",
-      "sheet": {
-        "skills":["잠입","생존","절벽오르기"],
-        "items":[{"name":"밧줄","charges":1},{"name":"단검"}],
-        "spells":[{"name":"라이트","charges":3}],
-        "notes":"..."
-      },
-      "memory":"..." }
-  ],
-  "log": [ {"turn":0, "narration":"..."}, ... ]
-}
-
-선택지 제안 응답:
-{
-  "turn": 1,
-  "options": { "p1": [{"id":"A","text":"...","tags":["잠입"]}, ... up to 3] }
-}
-
-해결 응답(핵심 키):
-{
-  "turn": 2,
-  "narration": "...",
-  "personal": { "p1":"..." },
-  "world": {...},
-  "party": [...변경...],
-  "log_append": [...],
-  "shari": {
-    "assess":[...], "rolls":[...],
-    "update": {
-      "characterHurt": {"p1": false},
-      "currentLocation":"...", "previousLocation":"...",
-      "notes":"...",
-      "inventory": {
-        "consumed": {"p1":["밧줄"]},
-        "added": {"p1":["금화 10"]},
-        "charges": {"p1":{"라이트": -1}}
-      },
-      "skills": {
-        "cooldown": {"p1":{"전력질주": 2}}
-      }
-    }
-  }
-}
-"""
 from __future__ import annotations
 
 import json
@@ -257,12 +198,19 @@ def _get_pacing_instructions(current_turn: int, max_turns: int) -> str:
         return f"현재 {current_turn}턴이다. 이제 이야기의 절정(클라이맥스) 또는 결말을 향해 빠르게 전개하라. 곧 엔딩이 가까워졌음을 암시하라."
 
 GM_SYSTEM = (
-    "너는 공정하고 창의적인 TRPG 게임 마스터(GM)이며, 주어진 **{genre} 장르의 전문가**다. "
-    "플레이어별로 상호작용적 선택지를 제시하고, 그 선택의 결과를 일관된 세계관과 규칙에 따라 판정한다. "
-    "메타 발언/설정 파괴 금지. 플레이 템포는 경쾌하되 과도한 설명은 피한다."
+    "너는 TRPG 게임의 감독(Director)이자 작가다. 너의 임무는 주어진 시나리오를 바탕으로 게임의 목표와 다양한 엔딩 가능성을 설정하고, 플레이어의 선택에 따라 이야기를 역동적으로 이끌어가는 것이다."
 )
 
-PROPOSE_TEMPLATE = """아래의 세션 상태를 바탕으로, **각 플레이어에게 서로 다른 2~3개의 선택지**를 제시하라.
+PROPOSE_TEMPLATE = """너는 TRPG 게임의 감독이다. 아래 [시나리오 정보]를 바탕으로, 플레이어들이 다음 단계로 나아갈 흥미로운 선택지를 제시해야 한다.
+
+**[시나리오 정보]**
+- **제목**: {title}
+- **한 줄 요약**: {summary}
+
+**[너의 임무]**
+1.  먼저, 위 시나리오 정보를 바탕으로 이 이야기의 **가장 이상적인 메인 목표(Main Goal)**와 **비극적인 실패 조건(Bad Ending Condition)**을 마음속으로 정의하라.
+2.  그 다음, 현재 게임 상황과 아래 [게임 규칙]을 고려하여, 정의한 목표를 향해 나아가거나 또는 실패 조건에 가까워지는 **의미 있는 선택지**를 플레이어에게 제시하라.
+3.  **매우 중요**: 이야기가 정체되지 않도록 매 턴마다 상황에 의미있는 변화를 만들어라. 이전과 비슷한 선택지 제시는 절대 금지한다.
 
 **[게임 규칙]**
 - **난이도 규칙**: {difficulty_instructions}
@@ -271,18 +219,12 @@ PROPOSE_TEMPLATE = """아래의 세션 상태를 바탕으로, **각 플레이�
 **[장르 재해석 가이드: {genre}]**
 {genre_interpretation_guide}
 
-제시 원칙:
-- 각 플레이어의 역할/시트/기억과 **보유 스킬/아이템/주문**을 고려하여 차별화
-- 한글 {language}로 간결하게 작성
-- 각 선택지는 "text" 1문장, 필요 시 "tags"(예: "잠입","교섭") 부여
-- 최소 1개 선택지는 해당 플레이어의 **핵심 스킬 또는 보유 아이템**을 활용하는 방향을 제시
-- 결과는 JSON (스펙 하단)
-
-세션 상태(JSON):
+[현재 세션 상태]
 {state_json}
 
 [파티 능력/아이템 요약]
 {cap_summary}
+
 
 응답 JSON 스펙:
 {{
@@ -297,28 +239,29 @@ PROPOSE_TEMPLATE = """아래의 세션 상태를 바탕으로, **각 플레이�
 """
 
 # === SHARI 전용 Resolve 템플릿 (ANU + 1d6 룰) — 항상 이 템플릿만 사용 ===
-RESOLVE_TEMPLATE_SHARI = """아래의 세션 상태와 플레이어 선택을 바탕으로, **한 턴의 결과**를 작성하라.
+RESOLVE_TEMPLATE_SHARI = """너는 TRPG 게임의 감독이다. 아래 [시나리오 정보]를 바탕으로, 플레이어의 선택이 어떤 결과를 가져오는지 서술해야 한다.
+
+**[시나리오 정보]**
+- **제목**: {title}
+- **한 줄 요약**: {summary}
+
+**[너의 임무]**
+1.  먼저, 위 시나리오 정보를 바탕으로 이 이야기의 **가장 이상적인 메인 목표(Main Goal)**와 **비극적인 실패 조건(Bad Ending Condition)**을 마음속으로 정의하라.
+2.  그 다음, 플레이어의 선택이 **정의한 목표에 가까워지는지, 아니면 실패 조건에 가까워지는지** 판단하고, 그 결과를 [게임 규칙]과 [장르]에 맞춰 드라마틱하게 서술하라.
+3.  **엔딩 분기**: 만약 플레이어의 행동이 명백히 실패 조건에 해당(예: HP 0 이하)하거나, 게임의 마지막 턴에 도달했다면, **이야기의 최종 결말(해피/배드/히든 엔딩)을 제시**하고 응답 JSON에 `"is_final_turn": true`를 포함시켜라.
 
 **[게임 규칙]**
 - **난이도 규칙**: {difficulty_instructions}
 - **게임 진행 페이스**: 이 게임은 총 {max_turns}턴 내외로 진행된다. {pacing_instructions}
+- **체력 규칙**: 플레이어의 체력(hp)이 0 이하가 되면, 그 캐릭터는 죽거나 전투불능이 된다. 이는 게임의 비극적인 엔딩으로 이어질 수 있다.
 
 **[장르 재해석 가이드: {genre}]**
 {genre_interpretation_guide}
 
-원칙:
-- Assess → Narrate → Update(ANU)를 따른다.
-- 위험하거나 불확실한 행동은 1d6 판정(1~3 불리, 4~6 유리)을 적용한다.
-- 단, **플레이어의 보유 스킬/아이템/주문이 직접적으로 적용되어 위험·불확실성이 충분히 낮아지면** 주사위를 생략해도 된다(안전하고 개연적이면 곧바로 성공으로 처리).
-- 플레이어 에이전시를 침해하지 말고(결과만 서술), 세계/파티 상태 갱신을 간단 JSON으로 제시한다.
-- 결과는 반드시 JSON으로만.
-- 공통 내러티브 문장 수는 최대 4문장, personal은 각 1~2문장으로 제한.
-- party 배열 길이는 입력 party와 동일하거나 더 작아야 하며, 각 항목의 changes는 3개 키 이하로 요약.
-
-세션 상태(JSON):
+[이전 세션 상태]
 {state_json}
 
-플레이어 선택(JSON):
+[플레이어 선택]
 {choices_json}
 
 [파티 능력/아이템 요약]
@@ -396,42 +339,49 @@ class AIGameMaster:
             raise RuntimeError(f"Azure OpenAI 설정 누락: {', '.join(missing)}")
 
     # 1) 선택지 제안
-    def propose_choices(
-        self,
-        state: Dict[str, Any],
-        language: str = "ko",
-        temperature: float = 0.6,
-        top_p: float = 0.9,
-        max_tokens: int = 1400,
-    ) -> Dict[str, Any]:
-        next_turn = int(state.get("turn", 0)) + 1
-        state_json = json.dumps(state, ensure_ascii=False)
-        cap_summary = _summarize_party_capabilities(state)
+    def propose_choices(self, state: Dict[str, Any], language: str = "ko", **kwargs) -> Dict[str, Any]:
+        max_tokens = kwargs.get('max_tokens', 1400)
+        temperature = kwargs.get('temperature', 0.6)
+        top_p = kwargs.get('top_p', 0.9)
+        
+        # 1. state에서 필요한 모든 "재료"를 안전하게 꺼냅니다.
         scenario = state.get("scenario", {})
+        title = scenario.get("title", "알 수 없는 이야기")
+        summary = scenario.get("summary", "정해진 요약 없음")
         genre = scenario.get("genre", "판타지")
         difficulty = state.get("difficulty", "중급")
-        current_turn = state.get("turn", 1)
-        max_turns = 10 # 최대 턴 수 설정
+        
+        current_scene = state.get("current_scene", {})
+        current_turn = current_scene.get("index", state.get("turn", 1) - 1) + 1
+        
+        max_turns = 7
 
+        print(f"➡️ [AIGameMaster.resolve_turn] Called. Turn={current_turn}, Max_Turns={max_turns}, Difficulty='{difficulty}', Genre='{genre}'")
+
+        # 2. 재료를 바탕으로 AI에게 줄 "규칙"을 생성합니다.
         genre_guide = _get_genre_interpretation_guide(genre)
         difficulty_instructions = _get_difficulty_instructions(difficulty)
-        pacing_instructions = _get_pacing_instructions(current_turn, max_turns)        
-
+        pacing_instructions = _get_pacing_instructions(current_turn, max_turns)
+        
+        state_json = json.dumps(state, ensure_ascii=False)
+        cap_summary = _summarize_party_capabilities(state)
+        
+        # 3. 모든 정보를 프롬프트에 채워넣습니다.
         prompt = PROPOSE_TEMPLATE.format(
+            title=title,
+            summary=summary,
             state_json=state_json,
-            next_turn=next_turn,
-            language=language,
             cap_summary=cap_summary,
-            genre=genre,                      
+            next_turn=current_turn + 1,
+            genre=genre,
+            language=language, # <-- 이 부분이 빠져있었습니다.
             genre_interpretation_guide=genre_guide,
             difficulty_instructions=difficulty_instructions,
             max_turns=max_turns,
-            pacing_instructions=pacing_instructions            
+            pacing_instructions=pacing_instructions
         )
-        logger.debug(
-            "propose_choices: tokens[max]=%s, state_len=%s, cap_len=%s",
-            max_tokens, len(state_json), len(cap_summary)
-        )
+        
+        print(f"➡️ [AIGameMaster.resolve_turn] Submitting prompt to LLM... (Pacing instructions: '{pacing_instructions}')")
 
         system_prompt_content = GM_SYSTEM.format(genre=genre)
 
@@ -445,72 +395,74 @@ class AIGameMaster:
             response_format={"type": "json_object"},
         )
         txt = resp.choices[0].message.content
-        logger.debug("propose_choices: response_len=%s", len(txt or ""))
         try:
-            return json.loads(_extract_json_block(txt))
+            result = json.loads(_extract_json_block(txt))
+            # ✅ LLM 응답 성공 로그 추가
+            print(f"✅ [AIGameMaster.resolve_turn] Successfully parsed LLM response.")
         except Exception as e:
-            logger.exception("선택지 JSON 파싱 실패: %s", e)
-            raise ValueError("선택지 JSON 파싱 실패(응답 형식 오류).")
+            # ❌ LLM 응답 실패 로그 강화
+            print(f"❌ [AIGameMaster.resolve_turn] Failed to parse JSON from LLM response. Error: {e}")
+            print("--- LLM Raw Response ---")
+            print(txt)
+            print("------------------------")
+            logger.exception("해결 JSON 파싱 실패: %s", e)
+            raise ValueError("해결 JSON 파싱 실패(응답 형식 오류).")
 
     # 2) 턴 해결(선택 반영) — SHARI 고정 + 능력/아이템 반영
-    def resolve_turn(
-        self,
-        state: Dict[str, Any],
-        choices: Dict[str, Any],
-        language: str = "ko",
-        temperature: float = 0.7,
-        top_p: float = 0.95,
-        max_tokens: int = 2500,
-    ) -> Dict[str, Any]:
-        next_turn = int(state.get("turn", 0)) + 1
-        prev_turn = next_turn - 1
-
-        # (선택) 클라가 붙여 보낸 고정 주사위 힌트 읽기
-        rolls_hint: Dict[str, int] = {}
-        try:
-            rh = choices.get("_rolls") or {}
-            if isinstance(rh, dict):
-                rolls_hint = {
-                    str(k): int(v) for k, v in rh.items()
-                    if isinstance(v, (int, float)) and 1 <= int(v) <= 6
-                }
-        except Exception:
-            rolls_hint = {}
-
-        extra_hint = ""
-        if rolls_hint:
-            extra_hint = (
-                "\n\n[고정 주사위 결과]\n"
-                + json.dumps(rolls_hint, ensure_ascii=False)
-                + "\n"
-                + "위 값이 제공된 플레이어의 판정에는 반드시 해당 d6 값을 사용하라."
-            )
-
-        state_json = json.dumps(state, ensure_ascii=False)
-        choices_json = json.dumps(choices, ensure_ascii=False)
-        cap_summary = _summarize_party_capabilities(state)
+    def resolve_turn(self, state: Dict[str, Any], choices: Dict[str, Any], language: str = "ko", **kwargs) -> Dict[str, Any]:
+        max_tokens = kwargs.get('max_tokens', 2500)
+        temperature = kwargs.get('temperature', 0.7)
+        top_p = kwargs.get('top_p', 0.95)
+        
+        # 1. state에서 필요한 모든 "재료"를 안전하게 꺼냅니다.
         scenario = state.get("scenario", {})
+        title = scenario.get("title", "알 수 없는 이야기")
+        summary = scenario.get("summary", "정해진 요약 없음")
         genre = scenario.get("genre", "판타지")
         difficulty = state.get("difficulty", "중급")
-        current_turn = state.get("turn", 1)
-        max_turns = 10 # 최대 턴 수 설정
+        
+        current_scene = state.get("current_scene", {})
+        current_turn = current_scene.get("index", state.get("turn", 1) - 1) + 1
+        
+        max_turns = 7
+        next_turn = current_turn + 1
+        prev_turn = current_turn
 
+        # 2. 재료를 바탕으로 AI에게 줄 "규칙"을 생성합니다.
         genre_guide = _get_genre_interpretation_guide(genre)
         difficulty_instructions = _get_difficulty_instructions(difficulty)
         pacing_instructions = _get_pacing_instructions(current_turn, max_turns)
-
+        
+        rolls_hint, extra_hint = {}, ""
+        try:
+            rh = choices.get("_rolls") or {}
+            if isinstance(rh, dict):
+                rolls_hint = { str(k): int(v) for k, v in rh.items() if isinstance(v, (int, float)) and 1 <= int(v) <= 6 }
+        except Exception:
+            rolls_hint = {}
+        if rolls_hint:
+            extra_hint = ("\n\n[고정 주사위 결과]\n" + json.dumps(rolls_hint, ensure_ascii=False) +
+                          "\n" + "위 값이 제공된 플레이어의 판정에는 반드시 해당 d6 값을 사용하라.")
+        
+        state_json = json.dumps(state, ensure_ascii=False)
+        choices_json = json.dumps(choices, ensure_ascii=False)
+        cap_summary = _summarize_party_capabilities(state)
+        
+        # 3. 모든 정보를 프롬프트에 채워넣습니다.
         prompt = RESOLVE_TEMPLATE_SHARI.format(
+            title=title,
+            summary=summary,
             state_json=state_json,
             choices_json=choices_json,
+            cap_summary=cap_summary,
             next_turn=next_turn,
             prev_turn=prev_turn,
             language=language,
-            cap_summary=cap_summary,
-            genre=genre,                      
+            genre=genre,
             genre_interpretation_guide=genre_guide,
             difficulty_instructions=difficulty_instructions,
             max_turns=max_turns,
-            pacing_instructions=pacing_instructions            
+            pacing_instructions=pacing_instructions
         ) + extra_hint
 
         logger.debug(
@@ -530,42 +482,25 @@ class AIGameMaster:
             response_format={"type": "json_object"},
         )
         txt = resp.choices[0].message.content
-        logger.debug("resolve_turn: response_len=%s", len(txt or ""))
-
+        
         try:
             result = json.loads(_extract_json_block(txt))
         except Exception as e:
             logger.exception("해결 JSON 파싱 실패: %s", e)
             raise ValueError("해결 JSON 파싱 실패(응답 형식 오류).")
 
-        # 결과 보정 (필수 키/개인 묘사/인벤토리·스킬 구조 등)
         result = _normalize_result(state, result)
-        # ✅ (신규) 이번 턴 장면 이미지 생성
         if IMAGE_GEN_ENABLED:
             try:
-                scene_prompt = build_scene_prompt(state, result)  # 현 상태 + 이번 턴 결과를 반영
-                img_res = generate_scene_image(
-                    scene_prompt,
-                    size="1024x1024",
-                    quality="standard",
-                    style="vivid",
-                    n=1
-                )
+                scene_prompt = build_scene_prompt(state, result)
+                img_res = generate_scene_image(scene_prompt, size="1024x1024", quality="standard", style="vivid", n=1)
                 if img_res.get("ok"):
                     data = (img_res["result"].get("data") or [])
                     image_url = data[0].get("url") if data else None
-                    result["image"] = {
-                        "url": image_url,
-                        "prompt": img_res.get("prompt")
-                    }
+                    result["image"] = {"url": image_url, "prompt": img_res.get("prompt")}
                 else:
-                    result["image"] = {
-                        "url": None,
-                        "error": img_res.get("error"),
-                        "prompt": img_res.get("prompt")
-                    }
+                    result["image"] = {"url": None, "error": img_res.get("error"), "prompt": img_res.get("prompt")}
             except Exception as e:
-                # 로거가 있으니 그대로 사용
                 logger.exception("이미지 생성 실패: %s", e)
                 result["image"] = {"url": None, "error": str(e)}
         return result

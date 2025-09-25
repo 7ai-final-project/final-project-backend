@@ -1,5 +1,4 @@
 import redis.asyncio as aioredis
-from .scenarios_turn import get_scene_template
 import json
 
 REDIS_URL = "redis://redis:6379"
@@ -57,20 +56,6 @@ class GameState:
         """방의 전체 게임 상태를 저장합니다."""
         conn = await GameState._get_conn()
         await conn.set(f"game:{room_id}:state", json.dumps(state))
-    
-    @staticmethod
-    async def initialize_turn_order(room_id, scene_index):
-        """씬 시작 시 턴 순서와 현재 턴 인덱스를 초기화"""
-        conn = await GameState._get_conn()
-        template = get_scene_template(scene_index) # 턴제용 템플릿 사용
-        if not template or "turns" not in template:
-            return
-
-        turn_order = [turn["role"] for turn in template["turns"]]
-        
-        # 턴 순서(리스트)와 현재 턴 인덱스(0)를 저장
-        await conn.set(f"game:{room_id}:scene:{scene_index}:turn_order", json.dumps(turn_order))
-        await conn.set(f"game:{room_id}:scene:{scene_index}:current_turn_index", 0)
 
     @staticmethod
     async def record_turn_roll(room_id, player_id, roll):

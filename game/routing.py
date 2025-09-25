@@ -9,7 +9,4 @@ websocket_urlpatterns = [
     
     # 실시간 게임 Consumer
     path("ws/game_realtime/<uuid:room_id>/", multi_mode_consumers.GameConsumer.as_asgi()),
-    
-    # 턴제 게임 Consumer
-    path("ws/game_turnbased/<uuid:room_id>/", multi_mode_consumers.TurnBasedGameConsumer.as_asgi()),
 ]

@@ -478,26 +478,32 @@ class SingleGameInitialView(APIView):
         topic = request.data.get("topic")
         characters_data = request.data.get("characters", [])
         my_character_data = request.data.get("myCharacter")
+        # ▼ 프론트엔드로부터 difficulty, genre 값을 정확히 받음
+        difficulty = request.data.get("difficulty", "중급")
+        genre = request.data.get("genre", "판타지")
 
         if not topic or not characters_data or not my_character_data:
-            return Response({"error": "토픽과 캐릭터 정보(myCharacter, characters)가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "토픽과 캐릭터 정보가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
 
         scenario = Scenario.objects.filter(title=topic).first()
         if not scenario:
             return Response({"error": f"시나리오 '{topic}'을(를) 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
         
-        # ✅ [수정] create_system_prompt에 my_character 대신 characters_data(전체 목록)를 전달합니다.
-        system_prompt = gm_engine_single.create_system_prompt(scenario, characters_data)
+        # ▼ [수정 1] create_system_prompt 호출 시 모든 인자(current_turn=0, difficulty) 전달
+        system_prompt = gm_engine_single.create_system_prompt(scenario, characters_data, 0, difficulty)
         initial_history = [system_prompt]
         user_message = "모든 캐릭터가 참여하는 게임의 첫 번째 씬(sceneIndex: 0)을 생성해줘. 비극적인 사건 직후의 긴장감 있는 상황으로 시작해줘."
         
         scene_json, history = async_to_sync(gm_engine_single.ask_llm_for_scene)(initial_history, user_message)
         
         if scene_json:
+            # ▼ [수정 2] initial_state에 difficulty, genre 정보를 "저장"하여 다음 턴으로 전달
             initial_state = {
                 "conversation_history": history,
                 "scenario": {"title": scenario.title, "summary": scenario.description},
-                "party": characters_data
+                "party": characters_data,
+                "difficulty": difficulty,
+                "genre": genre,
             }
             return Response({"scene": scene_json, "initial_state": initial_state}, status=status.HTTP_200_OK)
         else:
@@ -513,6 +519,7 @@ class SingleGameProceedView(APIView):
         game_state = request.data.get("gameState")
         usage_data = request.data.get("usage")
         all_characters = request.data.get("allCharacters", [])
+        difficulty = game_state.get("difficulty", "중급")
         
         if not all([player_result, current_scene, game_state]):
             return Response({"error": "필수 데이터가 누락되었습니다."}, status=status.HTTP_400_BAD_REQUEST)
@@ -533,7 +540,8 @@ class SingleGameProceedView(APIView):
             stat_value = stats.get(ai_choice['appliedStat'], 0)
             modifier = ai_choice['modifier']
             total = dice + stat_value + modifier
-            dc = 13
+            dc_map = {"초급": 10, "중급": 13, "상급": 16}
+            dc = dc_map.get(difficulty, 13)
             grade = "F"
             if dice == 20: grade = "SP"
             elif dice == 1: grade = "SF"
@@ -563,10 +571,17 @@ class SingleGameProceedView(APIView):
 
         # ✅ 수정된 ask_llm_for_narration 함수에 usage_text 전달
         scene_title = current_scene.get('round', {}).get('title', '알 수 없는 곳')
-        narration, shari_data = async_to_sync(gm_engine_single.ask_llm_for_narration)(
+        
+        # ◀ 2. 현재 턴 번호(인덱스) 가져오기
+        current_turn = current_scene.get("index", 0)
+
+        # ◀ 3. ask_llm_for_narration 호출 시 모든 파라미터 전달 및 is_final_turn 반환값 받기
+        narration, shari_data, is_final_turn = async_to_sync(gm_engine_single.ask_llm_for_narration)(
             game_state.get('conversation_history', []),
             scene_title,
             all_player_results,
+            current_turn,    # current_turn 전달
+            difficulty,      # difficulty 전달
             usage_text
         )
 
@@ -602,6 +617,7 @@ class SingleGameProceedView(APIView):
             "nextGameState": game_state,
             "shari": shari_data,
             "party_state": party_state,
+            "is_final_turn": is_final_turn
         }
         return Response(response_data, status=status.HTTP_200_OK)
 
