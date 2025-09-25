@@ -15,8 +15,6 @@ from django.contrib.auth.models import AnonymousUser
 
 from game.models import MultimodeSession, GameRoom, GameJoin, GameRoomSelectScenario, Scenario, Character, Difficulty, Mode, Genre
 from game.serializers import GameJoinSerializer, GameRoomSerializer
-from .scenarios_turn import get_scene_template
-from .round import perform_turn_judgement
 from .state import GameState
 
 from asgiref.sync import sync_to_async
@@ -528,6 +526,9 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
     async def receive_json(self, content, **kwargs):
         msg_type = content.get("type")
         user = self.scope.get("user", AnonymousUser())
+        
+        # ✅ 어떤 요청이 들어왔는지 로그 추가
+        print(f"📩 [GameConsumer] Received message type '{msg_type}' from user '{user.name}'")
 
         if msg_type == "request_initial_scene":
             scenario_title = content.get("topic")
@@ -537,32 +538,28 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "submit_player_choice":
             player_result_data = content.get("player_result")
-            all_characters = content.get("all_characters") # all_characters는 이제 참고용으로만 사용
+            all_characters = content.get("all_characters")
             
-            # ✅ 1. 현재 플레이어의 결과를 Redis에 저장합니다.
             await GameState.store_turn_result(self.room_id, str(user.id), player_result_data)
 
-            # ✅ 2. 현재 방의 모든 인간 플레이어와 제출된 결과를 가져옵니다.
             active_participants = await self._get_active_participants()
             active_participant_ids = {str(p.user.id) for p in active_participants}
             
             submitted_results = await GameState.get_all_turn_results(self.room_id)
             submitted_user_ids = set(submitted_results.keys())
 
-            # ✅ 3. 아직 모든 플레이어가 제출하지 않았다면, '대기' 상태만 알립니다.
             if not active_participant_ids.issubset(submitted_user_ids):
-                print(f"[{self.room_id}] 대기 중... ({len(submitted_user_ids)}/{len(active_participant_ids)})")
+                # ✅ 대기 상태 로그 추가
+                print(f"➡️ [GameConsumer] Waiting for other players... ({len(submitted_user_ids)}/{len(active_participant_ids)})")
                 await self.broadcast_to_group({
                     "event": "turn_waiting",
                     "submitted_users": list(submitted_user_ids),
                     "total_users": len(active_participant_ids),
                 })
-            # ✅ 4. 모든 플레이어가 제출했다면, 턴을 최종 처리합니다.
             else:
-                print(f"[{self.room_id}] 모든 결과 수신 완료. 턴 처리 시작.")
+                print(f"✅ [GameConsumer] All players submitted. Starting turn resolution.")
                 human_player_results = list(submitted_results.values())
                 await self.handle_turn_resolution_with_ai(human_player_results, all_characters)
-                # 다음 턴을 위해 저장된 결과 초기화
                 await GameState.clear_turn_results(self.room_id)
 
         elif msg_type == "ready_for_next_scene":
@@ -655,17 +652,25 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
         """
         [교체] 모든 인간 플레이어의 결과와 AI 턴을 종합하여 SHARI 엔진으로 턴을 처리하고, 게임 종료 조건을 확인합니다.
         """
+        print("\n--- 턴 처리 시작 ---")
         state = await GameState.get_game_state(self.room_id)
         current_scene = state.get("current_scene")
         history = state.get("conversation_history", [])
-        # ✨ 난이도 정보를 state에서 가져옵니다 (없을 경우 기본값).
         difficulty = state.get("difficulty", "초급") 
 
         if not current_scene:
+            print("❌ [handle_turn_resolution_with_ai] Error: current_scene not found in state.")
             await self.send_error_message("오류: 현재 씬 정보를 찾을 수 없습니다.")
             return
 
-        # 1. SHARI 엔진에 입력할 데이터 준비 (기존과 동일)
+        current_turn = current_scene.get("index", 0) + 1
+        max_turns = 7
+        
+        # ✅ 현재 턴 정보 로그 추가
+        print(f"➡️ [handle_turn_resolution_with_ai] Turn Info: Current Turn = {current_turn}, Max Turns = {max_turns}")
+        print(f"➡️ [handle_turn_resolution_with_ai] Received Human Player Results: {human_player_results}")
+
+
         shari_state = self._build_shari_state(all_characters, current_scene, history)
         
         shari_choices = {}
@@ -681,70 +686,76 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
         ai_characters = [c for c in all_characters if c['id'] not in human_char_ids]
         
-        # ✨ 2. AI 캐릭터 턴 시뮬레이션 및 결과 생성
         ai_player_results = []
         for ai_char in ai_characters:
             role_id = ai_char.get('role_id')
             choices_for_role = scene_choices_data.get(role_id, [])
             
-            # AI의 선택지를 shari_choices에 추가
             if choices_for_role:
                 random_choice = random.choice(choices_for_role)
                 shari_choices[ai_char['id']] = random_choice['text']
             else:
                 shari_choices[ai_char['id']] = "상황을 지켜봄"
             
-            # AI의 판정 결과를 생성
             ai_result = self._simulate_ai_turn_result(ai_char, choices_for_role, difficulty, role_id)
             if ai_result:
                 ai_player_results.append(ai_result)
+        
+        # ✅ AI 시뮬레이션 결과 로그 추가
+        print(f"➡️ [handle_turn_resolution_with_ai] Simulated AI Player Results: {ai_player_results}")
 
-        # ✨ 3. 인간과 AI의 모든 결과를 합칩니다.
         all_player_results = human_player_results + ai_player_results
         
-        # 4. SHARI 엔진 호출 (기존과 동일)
         try:
-            print(f"🚀 SHARI 엔진 호출 시작. Turn: {shari_state['turn']}")
+            print(f"➡️ [handle_turn_resolution_with_ai] Calling GM Engine (resolve_turn)...")
             gm_result = await sync_to_async(self.gm.resolve_turn)(state=shari_state, choices=shari_choices)
-            print("🎉 SHARI 엔진 응답 수신 완료.")
+            print(f"✅ [handle_turn_resolution_with_ai] GM Engine returned successfully.")
         except Exception as e:
-            print(f"❌ SHARI 엔진 호출 중 심각한 오류 발생: {e}")
+            print(f"❌ [handle_turn_resolution_with_ai] GM Engine call failed: {e}")
             await self.send_error_message(f"AI 게임 마스터 엔진 오류: {e}")
             return
         
-        is_game_over = gm_result.get("is_final_turn", False)
+        is_turn_limit_reached = current_turn >= max_turns
+        is_llm_final_turn = gm_result.get("is_final_turn", False)
+        is_game_over = is_turn_limit_reached or is_llm_final_turn
+
+        # ✅ 게임 종료 조건 판단 결과 로그 추가
+        print(f"➡️ [handle_turn_resolution_with_ai] Game Over Check: is_turn_limit_reached={is_turn_limit_reached}, is_llm_final_turn={is_llm_final_turn} -> is_game_over={is_game_over}")
 
         if is_game_over:
-            print(f"✅ 게임 종료 조건 충족 (is_final_turn=True). Room: {self.room_id}")
-            
-            # 1. 모든 클라이언트에게 게임 종료 이벤트를 브로드캐스트합니다.
+            final_narration = gm_result.get('narration', '이야기가 막을 내립니다.')
+            if is_turn_limit_reached:
+                print(f"✅ [handle_turn_resolution_with_ai] Game Over by reaching max turns.")
+                final_narration = f"최대 턴({max_turns}턴)에 도달하여 이야기가 마무리됩니다.\n\n{final_narration}"
+            else:
+                print(f"✅ [handle_turn_resolution_with_ai] Game Over by LLM's 'is_final_turn' flag.")
+
             await self.broadcast_to_group({
                 "event": "game_over",
-                "narration": gm_result.get('narration', '이야기가 막을 내립니다.'),
+                "narration": final_narration,
                 "personal_narrations": gm_result.get('personal', {}),
                 "image": gm_result.get('image'),
             })
 
-            # 2. Redis에 저장된 게임 상태를 삭제합니다.
             await self.clear_game_state(self.room_id)
 
-            # 3. 데이터베이스의 방 상태를 'waiting'으로 변경합니다.
             @database_sync_to_async
             def update_room_status(room_id):
                 try:
                     room = GameRoom.objects.get(id=room_id)
                     room.status = "waiting"
                     room.save(update_fields=["status"])
-                    print(f"✅ DB의 방 상태를 'waiting'으로 변경 완료. Room: {room_id}")
+                    print(f"✅ DB room status updated to 'waiting'.")
                     return True
                 except GameRoom.DoesNotExist:
-                    print(f"❌ 방 상태 변경 실패: Room {room_id}를 찾을 수 없습니다.")
+                    print(f"❌ Failed to update room status: Room not found.")
                     return False
             
             await update_room_status(self.room_id)
 
         else:
-            # 기존의 턴 처리 로직을 그대로 실행합니다.
+            # ✅ 게임 계속 진행 로그 추가
+            print(f"➡️ [handle_turn_resolution_with_ai] Game continues. Broadcasting 'turn_resolved'.")
             next_game_state = apply_gm_result_to_state(state, gm_result)
             
             narration = gm_result.get('narration', '아무 일도 일어나지 않았습니다.')
@@ -1239,105 +1250,3 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
             "payload": event["payload"]
         })
 
-
-class TurnBasedGameConsumer(AsyncJsonWebsocketConsumer):
-    async def connect(self):
-        self.room_id = self.scope["url_route"]["kwargs"]["room_id"]
-        self.group_name = f"game_{self.room_id}"
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
-        await self.accept()
-
-        # 고정된 플레이어와 턴 순서로 초기 상태 생성
-        scene0_template = get_scene_template(0)
-        roles = scene0_template["roleMap"]
-        
-        players = [{"id": name, "name": name, "role": role_id} for name, role_id in roles.items()]
-        
-        turn_order_roles = ["brother", "sister", "tiger", "goddess"]
-        turn_order_ids = [next(p["id"] for p in players if p["role"] == role) for role in turn_order_roles]
-
-        initial_state = {
-            "sceneIndex": 0,
-            "players": players,
-            "turnOrder": turn_order_ids,
-            "currentTurnIndex": 0,
-            "logs": [{"id": 0, "text": "게임 시작! 정해진 순서에 따라 진행합니다.", "isImportant": True}],
-            "isSceneOver": False,
-        }
-        await GameState.set_game_state(self.room_id, {})
-        
-    async def receive_json(self, content, **kwargs):
-        action = content.get("action")
-        state = await GameState.get_game_state(self.room_id)
-        if not state: return
-
-        if action == "request_initial_state":
-            await self.send_game_state()
-
-        elif action == "submit_turn_choice":
-            player_id = content.get("playerId")
-            choice_id = content.get("choiceId")
-            player = next((p for p in state["players"] if p["id"] == player_id), None)
-            
-            result_payload = await perform_turn_judgement(self.room_id, state["sceneIndex"], player["role"], choice_id)
-            
-            state["logs"].append({"id": len(state["logs"]), "text": f"👉 [{player_id}] 님이 '{result_payload['result']['choiceId']}' 선택지를 골랐습니다."})
-            state["logs"].append({"id": len(state["logs"]), "text": f"🎲 {result_payload['log']}"})
-            state["currentTurnIndex"] += 1
-            if state["currentTurnIndex"] >= len(state["turnOrder"]):
-                state["isSceneOver"] = True
-
-            await GameState.set_game_state(self.room_id, state)
-            await self.channel_layer.group_send(self.group_name, {"type": "broadcast_game_state"})
-
-        elif action == "run_ai_turn":
-            player_id = content.get("playerId")
-            player = next((p for p in state["players"] if p["id"] == player_id), None)
-            
-            template = get_scene_template(state["sceneIndex"])
-            choices_for_role = template.get("round", {}).get("choices", {}).get(player["role"], [])
-            
-            if not choices_for_role:
-                random_choice = {"id": "default", "text": "상황을 지켜본다"}
-            else:
-                random_choice = random.choice(choices_for_role)
-            
-            result_payload = await perform_turn_judgement(self.room_id, state["sceneIndex"], player["role"], random_choice["id"])
-            
-            state["logs"].append({"id": len(state["logs"]), "text": f"👉 [{player_id}](이)가 '{random_choice['text']}' 선택지를 골랐습니다."})
-            state["logs"].append({"id": len(state["logs"]), "text": f"🎲 {result_payload['log']}"})
-            state["currentTurnIndex"] += 1
-            if state["currentTurnIndex"] >= len(state["turnOrder"]):
-                state["isSceneOver"] = True
-            
-            await GameState.set_game_state(self.room_id, state)
-            await self.channel_layer.group_send(self.group_name, {"type": "broadcast_game_state"})
-
-        elif action == "request_next_scene":
-            state["sceneIndex"] += 1
-            state["currentTurnIndex"] = 0
-            state["isSceneOver"] = False
-            state["logs"].append({
-                "id": len(state["logs"]),
-                "text": f"--- 다음 이야기 시작 (Scene {state['sceneIndex']}) ---",
-                "isImportant": True
-            })
-            
-            await GameState.set_game_state(self.room_id, state)
-            await self.channel_layer.group_send(self.group_name, {"type": "broadcast_game_state"})
-
-    async def send_game_state(self):
-        state = await GameState.get_game_state(self.room_id)
-        await self.send_json({
-            "type": "game_state_update",
-            "payload": state
-        })
-
-    async def broadcast_game_state(self, event):
-        await self.send_game_state()
-
-    async def turn_roll_update(self, event):
-        await self.send_json({
-            "type": "turn_roll_update",
-            "rolls": event["rolls"]
-        })

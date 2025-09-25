@@ -62,7 +62,7 @@ class GoogleCallbackView(APIView) :
                 return JsonResponse({
                     'error' : '구글 사용자 정보 조회 실패'
                 }, status=status.HTTP_400_BAD_REQUEST)
-
+            
             user_data = user_response.json()
             print('구글 사용자 정보', user_data)
 
@@ -143,7 +143,7 @@ class KakaoCallbackView(APIView) :
                 return JsonResponse({
                     'error' : '카카오 사용자 정보 조회 실패'
                 }, status=status.HTTP_400_BAD_REQUEST)
-
+            
             user_data = user_response.json()
             print('카카오 사용자 정보', user_data)
 
@@ -231,7 +231,7 @@ class MicrosoftCallbackView(APIView) :
                 return JsonResponse({
                     'error' : '마이크로소프트 사용자 정보 조회 실패'
                 }, status=status.HTTP_400_BAD_REQUEST)
-
+            
             user_data = user_response.json()
             print('마이크로소프트 사용자 정보', user_data)
 
@@ -284,7 +284,7 @@ class UserInfoView(APIView) :
             return JsonResponse({
                 'user' : serializer.data
             }, status=status.HTTP_200_OK)
-
+        
         return JsonResponse({
             'error': 'Unauthorized'
         }, status=status.HTTP_401_UNAUTHORIZED)
@@ -311,7 +311,7 @@ class UserInfoUpdateView(APIView) :
             return JsonResponse({
                 'message': '닉네임은 2자 이상 10자 이하로 입력해주세요.'
             }, status=status.HTTP_400_BAD_REQUEST)
-
+        
         # 한글, 영문, 숫자만 허용하는 정규식 검사
         if not re.fullmatch(r'^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]*$', nickname):
             return JsonResponse({
@@ -353,7 +353,7 @@ class CustomTokenRefreshView(DRFTokenRefreshView) :
             return JsonResponse({
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        
 
 # 로그아웃
 class LogoutView(APIView) :
@@ -380,12 +380,12 @@ class LogoutView(APIView) :
 
 class UserAchievementsView(APIView):
     permission_classes = [IsAuthenticated]
-
+    
     def get(self, request):
         try:
             service = AchievementService(request.user)
             all_achievements = service.get_all_achievements_with_status()
-
+            
             for ach in all_achievements:
                 progress_info = service.get_achievement_progress_info(ach['id'])
                 if progress_info:
@@ -403,7 +403,7 @@ class UserAchievementsView(APIView):
                 'message': '업적이 성공적으로 조회되었습니다.',
                 'data': grouped_achievements
             }, status=status.HTTP_200_OK)
-
+            
         except Exception as e:
             print(f"UserAchievementsView 에러: {e}")
             return JsonResponse({
