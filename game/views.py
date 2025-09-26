@@ -572,6 +572,18 @@ class SingleGameProceedView(APIView):
             usage_text
         )
 
+        if is_final_turn:
+            try:
+                scenario_title = game_state.get("scenario", {}).get("title")
+                if scenario_title:
+                    session = SinglemodeSession.objects.get(user=request.user, scenario__title=scenario_title)
+                    session.status = 'finish'
+                    session.save(update_fields=['status'])
+            except SinglemodeSession.DoesNotExist:
+                pass
+            except Exception as e:
+                print(f"Error updating singlemode session status to finish: {e}")
+
         party_state = []
         character_hurt_map = (shari_data.get("update", {}) or {}).get("characterHurt", {})
 
